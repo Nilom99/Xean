@@ -138,7 +138,11 @@ export class Sandbox {
    * (agents need pipes), but the working directory can never leave the
    * sandbox and no secret is inherited from the parent environment.
    */
-  async runCommand(command: string, timeoutMs = COMMAND_TIMEOUT_MS): Promise<CommandResult> {
+  async runCommand(
+    command: string,
+    timeoutMs = COMMAND_TIMEOUT_MS,
+    signal?: AbortSignal
+  ): Promise<CommandResult> {
     const started = Date.now()
     const cwd = await this.realpathOrNearest(this.root)
     const env = this.scrubbedEnv()
@@ -151,7 +155,8 @@ export class Sandbox {
         reject: false,
         maxBuffer: 10 * 1024 * 1024,
         env,
-        windowsHide: true
+        windowsHide: true,
+        ...(signal ? { cancelSignal: signal } : {})
       })
       return {
         exitCode: typeof result.exitCode === 'number' ? result.exitCode : 1,
@@ -172,6 +177,15 @@ export class Sandbox {
           timedOut: true
         }
       }
+      if (/aborted|cancell?ed/i.test(message)) {
+        return {
+          exitCode: 130,
+          stdout: '',
+          stderr: 'Command cancelled.',
+          durationMs: Date.now() - started,
+          timedOut: false
+        }
+      }
       return {
         exitCode: 1,
         stdout: '',
@@ -187,11 +201,40 @@ export class Sandbox {
    * visible to agent-run shell commands.
    */
   private scrubbedEnv(): NodeJS.ProcessEnv {
+    // Minimal allowlist instead of "copy everything and filter a few names":
+    // unrelated application credentials (CI tokens, cloud keys, ...) must
+    // never reach a model-generated shell command.
+    const allowed = [
+      'PATH',
+      'HOME',
+      'USERPROFILE',
+      'USERNAME',
+      'LOGNAME',
+      'SHELL',
+      'TERM',
+      'LANG',
+      'LC_ALL',
+      'TMPDIR',
+      'TMP',
+      'TEMP',
+      'SystemRoot',
+      'windir',
+      'ComSpec',
+      'PATHEXT',
+      'APPDATA',
+      'LOCALAPPDATA',
+      'ProgramFiles',
+      'ProgramData',
+      'NODE_EXTRA_CA_CERTS',
+      'SSL_CERT_FILE',
+      'CURL_CA_BUNDLE',
+      'npm_config_cache',
+      'npm_config_prefix'
+    ]
     const env: NodeJS.ProcessEnv = {}
-    for (const [key, value] of Object.entries(process.env)) {
-      if (key === 'OPENROUTER_API_KEY' || key.startsWith('sk-or-')) continue
-      if (key.startsWith('CODEX_LOCAL_SECRET')) continue
-      env[key] = value
+    for (const key of allowed) {
+      const value = process.env[key]
+      if (typeof value === 'string') env[key] = value
     }
     env.CODEX_LOCAL_SANDBOX = '1'
     env.CODEX_LOCAL_WORKSPACE = this.root

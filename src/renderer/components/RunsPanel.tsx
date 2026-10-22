@@ -9,6 +9,7 @@ import { EmptyState } from './ui/Spinner'
 
 const STATUS_TONE = {
   done: 'success',
+  unverified: 'warning',
   aborted: 'warning',
   failed: 'danger'
 } as const

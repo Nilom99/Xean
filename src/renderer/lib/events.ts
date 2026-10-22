@@ -87,7 +87,7 @@ export interface EngineState {
   runId: string | null
   goal: string
   /** 'idle' before the first run, then the status of the last run. */
-  status: 'idle' | 'running' | 'done' | 'aborted' | 'failed'
+  status: 'idle' | 'running' | 'done' | 'aborted' | 'failed' | 'unverified'
   tasks: UiTask[]
   messages: UiMessage[]
   approvals: UiApproval[]

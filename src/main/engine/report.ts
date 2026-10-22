@@ -1,9 +1,9 @@
-import type { Task, UsageTotals } from '@shared/types'
+import type { RunStatus, Task, UsageTotals } from '@shared/types'
 
 export interface ReportInput {
   runId: string
   goal: string
-  status: 'done' | 'aborted' | 'failed'
+  status: RunStatus
   startedAt: number
   endedAt: number
   tasks: Task[]
@@ -131,6 +131,10 @@ export function buildRunReport(input: ReportInput): string {
     )
   } else if (input.status === 'done') {
     lines.push('Nothing outstanding — every task completed successfully.')
+  } else if (input.status === 'unverified') {
+    lines.push(
+      'Every task completed, but no verification command could be run — the result is unverified.'
+    )
   } else {
     // The run did not finish, so no task may be called complete even when none
     // of them is individually marked as failed.

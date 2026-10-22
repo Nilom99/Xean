@@ -73,15 +73,40 @@ with any free model.
 
 - All writes and shell commands go through a sandbox that resolves symlinks
   and refuses to touch anything outside the workspace.
-- The environment handed to agent-run commands is scrubbed of secrets.
+- Agent-run commands receive a minimal environment allowlist, so unrelated
+  credentials are not inherited by child processes.
 - Writes and commands require explicit approval unless you enable
   **Auto-approve file writes**.
+- Cancelling a run aborts in-flight provider requests and child processes.
+  Requests, commands and whole runs have configurable timeouts
+  (`requestTimeoutMs`, `commandTimeoutMs`, `runTimeoutMs`).
+
+## Reliability and verification
+
+- The planner's dependency graph is validated before execution: duplicate ids,
+  unknown dependencies and cycles fail the run with a clear message.
+- A failed check creates at most three repair tasks per round, inside the run
+  loop. Repairs are re-verified and stop after `maxRepairAttempts` (default 2).
+- A run is `done` only when every task finished **and** at least one check ran
+  and passed. Work with no executable check is reported as `unverified`;
+  failed/blocked work or a failed check is `failed`.
+- Every run, including aborted and failed runs, still writes `RUN_REPORT.md`.
+
+## Current provider support
+
+Codex Local currently talks to **OpenRouter free-tier models only**. The
+multi-provider and local-inference roadmap (OpenAI, Gemini, Anthropic, Groq,
+DeepSeek, Mistral, Together, Azure OpenAI, Hugging Face, Cohere, LM Studio,
+Ollama, vLLM and custom OpenAI-compatible endpoints) is documented, with the
+completed Phase 1 audit, in [`docs/PHASE1_AUDIT.md`](docs/PHASE1_AUDIT.md).
+Those adapters are not implemented yet and the UI does not pretend otherwise.
 
 ## Development
 
 ```bash
 npm run typecheck    # type-check the main, preload and renderer projects
 npm test             # unit tests for the pure logic
+npm run test:integration  # stubbed end-to-end orchestration checks (no API key)
 npm run doctor       # environment diagnostics
 npm run rebuild:native   # rebuild better-sqlite3 for Electron's ABI
 ```

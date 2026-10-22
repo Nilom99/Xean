@@ -48,8 +48,14 @@ export class TaskCycle {
   constructor(
     private readonly deps: TaskCycleDeps,
     private readonly runId: string,
-    private readonly isAborted: () => boolean
+    private readonly isAborted: () => boolean,
+    private readonly signal?: AbortSignal
   ) {}
+
+  /** Per-request cancellation and timeout settings. */
+  private get requestOptions(): { signal?: AbortSignal; timeoutMs: number } {
+    return { signal: this.signal, timeoutMs: this.deps.getConfig().requestTimeoutMs }
+  }
 
   /**
    * Run one task to completion (or to the iteration cap).
@@ -122,6 +128,11 @@ export class TaskCycle {
     assignments: Record<Role, RoleAssignment>
   ): Promise<'ok' | 'denied' | 'blocked' | 'failed'> {
     const { task } = state
+    // The board's state machine requires PENDING -> ASSIGNED -> IN_PROGRESS.
+    // Skipping the ASSIGNED step makes every transition throw (and the throw
+    // is deliberately ignored), which would leave the task PENDING for the
+    // whole run even though its files were written.
+    this.transition(task.id, 'ASSIGNED')
     this.transition(task.id, 'IN_PROGRESS')
     this.deps.board.update(task.id, { iteration: task.iteration + 1 })
 
@@ -173,7 +184,8 @@ export class TaskCycle {
       taskId: task.id,
       content: task.description,
       scratchpad,
-      temperature: 0.2
+      temperature: 0.2,
+      ...this.requestOptions
     })
 
     let proposed = parseProposedFiles(response.content)
@@ -201,7 +213,8 @@ export class TaskCycle {
           '',
           'Answer with the JSON object only.'
         ].join('\n'),
-        temperature: 0.1
+        temperature: 0.1,
+        ...this.requestOptions
       })
 
       proposed = parseProposedFiles(retry.content)
@@ -309,7 +322,8 @@ export class TaskCycle {
         12000
       )}`,
       scratchpad: 'Return your verdict as JSON.',
-      temperature: 0.2
+      temperature: 0.2,
+      ...this.requestOptions
     })
 
     const parsed = parseReview(response.content)
@@ -397,7 +411,8 @@ export class TaskCycle {
         runId: this.runId,
         taskId: task.id,
         content: `Two agents disagree about "${task.title}".\n\nImplementer position:\n${implementerPosition}\n\nReviewer position:\n${reviewerPosition}\n\nAnswer with JSON: {"resolution":"implementer"|"reviewer"|"user","reason":"..."}`,
-        temperature: 0.1
+        temperature: 0.1,
+        ...this.requestOptions
       })
       tieBroken =
         response.content.includes('"implementer"') || response.content.includes('"reviewer"')

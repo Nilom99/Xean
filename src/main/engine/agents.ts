@@ -64,6 +64,8 @@ export interface AgentRequest {
    */
   reasoningMaxTokens?: number
   signal?: AbortSignal
+  /** Timeout for this single provider request (ms). */
+  timeoutMs?: number
   /** Rolling context to continue an existing conversation. */
   context?: ContextWindow
 }
@@ -189,6 +191,7 @@ export class Agent {
           maxTokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
           reasoningMaxTokens,
           signal: request.signal,
+          timeoutMs: request.timeoutMs,
           onDelta: (text) => {
             this.deps.bus.emitEvent({
               type: 'AGENT_DELTA',
