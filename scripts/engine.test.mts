@@ -22,6 +22,7 @@ import { rankFiles, scoreFile, isTextFile, tokenize as ctxTokenize } from '../sr
 import { mergeCommands, isPlatformCompatible, filterPlatformCompatible } from '../src/main/engine/commands.ts'
 import { parseProposedFiles, normalizeProposedPath } from '../src/main/engine/protocol.ts'
 import { buildRunReport, type ReportInput } from '../src/main/engine/report.ts'
+import { TaskBoard } from '../src/main/engine/taskboard.ts'
 import type { EngineEvent, Task } from '../src/shared/types.ts'
 
 // ---------------------------------------------------------------- json ----
@@ -498,6 +499,46 @@ test('clear forgets every cooldown', () => {
 
   health.clear()
   assert.equal(health.isCoolingDown('a:free'), false)
+})
+
+// ------------------------------------------------------------ taskboard ----
+
+function makeBoardTask(board: TaskBoard): string {
+  return board.create({
+    runId: 'run-1',
+    title: 'Create hello.txt',
+    description: 'Write a greeting file.',
+    role: 'implementer'
+  }).id
+}
+
+test('a task follows the documented PENDING -> ASSIGNED -> ... -> DONE lifecycle', () => {
+  const board = new TaskBoard()
+  const id = makeBoardTask(board)
+  // This is the exact sequence TaskCycle uses; every step must be legal.
+  board.transition(id, 'ASSIGNED')
+  board.transition(id, 'IN_PROGRESS')
+  board.transition(id, 'IN_REVIEW')
+  board.transition(id, 'DONE')
+  assert.equal(board.get(id)?.status, 'DONE')
+})
+
+test('a PENDING task cannot skip the ASSIGNED step', () => {
+  const board = new TaskBoard()
+  const id = makeBoardTask(board)
+  assert.throws(() => board.transition(id, 'IN_PROGRESS'), /Illegal task transition/)
+  assert.equal(board.get(id)?.status, 'PENDING')
+})
+
+test('a user override can finish a task whose changes were requested', () => {
+  const board = new TaskBoard()
+  const id = makeBoardTask(board)
+  board.transition(id, 'ASSIGNED')
+  board.transition(id, 'IN_PROGRESS')
+  board.transition(id, 'IN_REVIEW')
+  board.transition(id, 'CHANGES_REQUESTED')
+  board.transition(id, 'DONE')
+  assert.equal(board.get(id)?.status, 'DONE')
 })
 
 // --------------------------------------------------------------- report ----

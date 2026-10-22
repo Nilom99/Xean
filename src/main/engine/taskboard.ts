@@ -14,7 +14,9 @@ const TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   ASSIGNED: ['IN_PROGRESS', 'PENDING', 'BLOCKED', 'FAILED'],
   IN_PROGRESS: ['IN_REVIEW', 'CHANGES_REQUESTED', 'DONE', 'BLOCKED', 'FAILED'],
   IN_REVIEW: ['DONE', 'CHANGES_REQUESTED', 'BLOCKED', 'FAILED'],
-  CHANGES_REQUESTED: ['ASSIGNED', 'IN_PROGRESS', 'BLOCKED', 'FAILED'],
+  // DONE is allowed directly: the user may accept the implementer's version
+  // when an escalation cannot be resolved by the agents themselves.
+  CHANGES_REQUESTED: ['ASSIGNED', 'IN_PROGRESS', 'DONE', 'BLOCKED', 'FAILED'],
   DONE: [],
   BLOCKED: ['PENDING'],
   FAILED: []

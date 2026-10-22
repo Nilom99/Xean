@@ -122,6 +122,11 @@ export class TaskCycle {
     assignments: Record<Role, RoleAssignment>
   ): Promise<'ok' | 'denied' | 'blocked' | 'failed'> {
     const { task } = state
+    // The board's state machine requires PENDING -> ASSIGNED -> IN_PROGRESS.
+    // Skipping the ASSIGNED step makes every transition throw (and the throw
+    // is deliberately ignored), which would leave the task PENDING for the
+    // whole run even though its files were written.
+    this.transition(task.id, 'ASSIGNED')
     this.transition(task.id, 'IN_PROGRESS')
     this.deps.board.update(task.id, { iteration: task.iteration + 1 })
 
