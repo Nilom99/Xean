@@ -161,8 +161,11 @@ class JsonStore implements Store {
         }),
         'utf8'
       )
-    } catch {
-      // disk errors must not break the run
+    } catch (err) {
+      // Surface the error and let the bus report it; never discard silently.
+      throw new Error(
+        `Could not persist the local run log: ${err instanceof Error ? err.message : String(err)}`
+      )
     }
   }
 

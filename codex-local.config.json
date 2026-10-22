@@ -6,6 +6,10 @@
   "tokenBudget": 400000,
   "autoApproveWrites": false,
   "theme": "dark",
+  "maxRepairAttempts": 2,
+  "requestTimeoutMs": 120000,
+  "commandTimeoutMs": 120000,
+  "runTimeoutMs": 3600000,
   "roles": {
     "orchestrator": {
       "alias": "minimax 3.1 flash",

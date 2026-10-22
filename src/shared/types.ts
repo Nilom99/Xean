@@ -26,6 +26,9 @@ export type TaskStatus =
 
 export type ReviewVerdict = 'APPROVED' | 'CHANGES_REQUESTED' | 'BLOCKED'
 
+/** Final status of a run. `unverified` means the work finished but no check ran. */
+export type RunStatus = 'done' | 'aborted' | 'failed' | 'unverified'
+
 export interface ReviewItem {
   id: string
   severity: 'blocker' | 'major' | 'minor'
@@ -64,7 +67,7 @@ export type EngineEvent =
   | { type: 'COMMAND_REQUEST'; ts: number; runId?: string; taskId: string; from: Role; command: string; cwd: string }
   | { type: 'COMMAND_RESULT'; ts: number; runId?: string; taskId: string; command: string; exitCode: number; stdout: string; stderr: string; durationMs: number }
   | { type: 'RUN_STARTED'; ts: number; runId: string; goal: string }
-  | { type: 'RUN_FINISHED'; ts: number; runId: string; status: 'done' | 'aborted' | 'failed'; summary: string }
+  | { type: 'RUN_FINISHED'; ts: number; runId: string; status: RunStatus; summary: string }
   | { type: 'RUN_ABORTED'; ts: number; runId: string; reason: string }
   | { type: 'APPROVAL_REQUIRED'; ts: number; runId?: string; id: string; kind: 'write' | 'command'; detail: string; payload: unknown }
   | { type: 'ERROR'; ts: number; runId?: string; scope: string; message: string }
@@ -116,6 +119,14 @@ export interface AppConfig {
   tokenBudget: number
   autoApproveWrites: boolean
   theme: 'dark' | 'light'
+  /** Bounded implement -> verify repair rounds after a failed check. */
+  maxRepairAttempts: number
+  /** Timeout for a single provider request. */
+  requestTimeoutMs: number
+  /** Timeout for a single shell command. */
+  commandTimeoutMs: number
+  /** Overall wall-clock limit for one run. */
+  runTimeoutMs: number
   roles: Record<Role, RoleModelConfig>
 }
 
@@ -148,7 +159,7 @@ export interface SettingsState {
 export interface RunSummary {
   runId: string
   goal: string
-  status: 'done' | 'aborted' | 'failed'
+  status: RunStatus
   startedAt: number
   endedAt: number
   tasks: number

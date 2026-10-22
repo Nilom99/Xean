@@ -18,7 +18,8 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "node --test --experimental-strip-types --import ./scripts/ts-register.mjs scripts/engine.test.mts",
     "doctor": "node scripts/doctor.mjs",
-    "rebuild:native": "electron-rebuild -f -w better-sqlite3"
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3",
+    "test:integration": "node --experimental-transform-types --import ./scripts/ts-register.mjs scripts/integration.test.mts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

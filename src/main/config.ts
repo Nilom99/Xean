@@ -23,6 +23,10 @@ const ConfigSchema = z.object({
   tokenBudget: z.number().int().min(1000).default(400000),
   autoApproveWrites: z.boolean().default(false),
   theme: z.enum(['dark', 'light']).default('dark'),
+  maxRepairAttempts: z.number().int().min(0).max(5).default(2),
+  requestTimeoutMs: z.number().int().min(5_000).max(900_000).default(120_000),
+  commandTimeoutMs: z.number().int().min(1_000).max(900_000).default(120_000),
+  runTimeoutMs: z.number().int().min(60_000).max(24 * 3_600_000).default(3_600_000),
   roles: z
     .object({
       // Every role is optional: a hand-edited config that is missing one role

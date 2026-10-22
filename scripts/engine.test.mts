@@ -23,6 +23,8 @@ import { mergeCommands, isPlatformCompatible, filterPlatformCompatible } from '.
 import { parseProposedFiles, normalizeProposedPath } from '../src/main/engine/protocol.ts'
 import { buildRunReport, type ReportInput } from '../src/main/engine/report.ts'
 import { TaskBoard } from '../src/main/engine/taskboard.ts'
+import { computeRunStatus, validateTaskGraph } from '../src/main/engine/runOutcome.ts'
+import { OpenRouterClient } from '../src/main/openrouter/client.ts'
 import type { EngineEvent, Task } from '../src/shared/types.ts'
 
 // ---------------------------------------------------------------- json ----
@@ -541,6 +543,101 @@ test('a user override can finish a task whose changes were requested', () => {
   assert.equal(board.get(id)?.status, 'DONE')
 })
 
+// ---------------------------------------------------------- run outcome ----
+
+test('a valid dependency graph passes validation', () => {
+  assert.deepEqual(
+    validateTaskGraph([
+      { id: 't1', dependsOn: [] },
+      { id: 't2', dependsOn: ['t1'] }
+    ]),
+    []
+  )
+})
+
+test('duplicate, missing and self dependencies are rejected', () => {
+  const errors = validateTaskGraph([
+    { id: 't1', dependsOn: [] },
+    { id: 't1', dependsOn: [] },
+    { id: 't2', dependsOn: ['nope'] },
+    { id: 't3', dependsOn: ['t3'] }
+  ])
+  assert.ok(errors.some((e) => /Duplicate task id "t1"/.test(e)))
+  assert.ok(errors.some((e) => /unknown task "nope"/.test(e)))
+  assert.ok(errors.some((e) => /depends on itself/.test(e)))
+})
+
+test('a circular dependency is reported with its path', () => {
+  const errors = validateTaskGraph([
+    { id: 't1', dependsOn: ['t2'] },
+    { id: 't2', dependsOn: ['t1'] }
+  ])
+  assert.equal(errors.length, 1)
+  assert.match(errors[0], /Circular dependency: t1 -> t2 -> t1/)
+})
+
+test('a run is unverified when no check ran', () => {
+  assert.equal(
+    computeRunStatus({
+      aborted: false,
+      tasks: [{ status: 'DONE' }],
+      verification: { ran: 0, failed: 0 }
+    }),
+    'unverified'
+  )
+})
+
+test('a failed or blocked task can never produce a successful run', () => {
+  for (const status of ['FAILED', 'BLOCKED', 'PENDING'] as const) {
+    assert.equal(
+      computeRunStatus({
+        aborted: false,
+        tasks: [{ status }],
+        verification: { ran: 3, failed: 0 }
+      }),
+      'failed'
+    )
+  }
+})
+
+test('a failed check or a cancelled run is never reported as success', () => {
+  assert.equal(
+    computeRunStatus({
+      aborted: false,
+      tasks: [{ status: 'DONE' }],
+      verification: { ran: 2, failed: 1 }
+    }),
+    'failed'
+  )
+  assert.equal(
+    computeRunStatus({
+      aborted: true,
+      tasks: [{ status: 'DONE' }],
+      verification: { ran: 2, failed: 0 }
+    }),
+    'aborted'
+  )
+})
+
+test('a run with no planned tasks is a failure, not a success', () => {
+  assert.equal(
+    computeRunStatus({ aborted: false, tasks: [], verification: { ran: 0, failed: 0 } }),
+    'failed'
+  )
+})
+
+test('verified work with every task done is a successful run', () => {
+  assert.equal(
+    computeRunStatus({
+      aborted: false,
+      tasks: [{ status: 'DONE' }, { status: 'DONE' }],
+      verification: { ran: 2, failed: 0 }
+    }),
+    'done'
+  )
+})
+
+
 // --------------------------------------------------------------- report ----
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -636,3 +733,61 @@ test('failed and blocked tasks are listed before any completion claim', () => {
   assert.match(section, /\*\*Broken\*\* failed: boom/)
   assert.match(section, /\*\*Stuck\*\* was blocked/)
 })
+
+// ------------------------------------------------------------- client ----
+
+type AttemptFn = (request: unknown) => Promise<unknown>
+
+function pendingFetch(): void {
+  globalThis.fetch = (async (_url: unknown, init?: { signal?: AbortSignal }) => {
+    return await new Promise<Response>((_resolve, reject) => {
+      const rejectAborted = (): void => {
+        const name = init?.signal?.reason?.name === 'TimeoutError' ? 'TimeoutError' : 'AbortError'
+        reject(new DOMException('aborted', name))
+      }
+      if (init?.signal?.aborted) {
+        rejectAborted()
+        return
+      }
+      init?.signal?.addEventListener('abort', rejectAborted)
+    })
+  }) as unknown as typeof fetch
+}
+
+test('a provider request timeout becomes a typed timeout error', async () => {
+  const original = globalThis.fetch
+  pendingFetch()
+  try {
+    const client = new OpenRouterClient(() => 'sk-or-test')
+    const attempt = (client as unknown as { attempt: AttemptFn }).attempt.bind(client)
+    await assert.rejects(
+      attempt({ model: 'fake/model:free', messages: [], timeoutMs: 30 }),
+      /did not answer within/
+    )
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+test('an aborted request becomes a typed cancellation error', async () => {
+  const original = globalThis.fetch
+  pendingFetch()
+  try {
+    const client = new OpenRouterClient(() => 'sk-or-test')
+    const attempt = (client as unknown as { attempt: AttemptFn }).attempt.bind(client)
+    const controller = new AbortController()
+    controller.abort()
+    await assert.rejects(
+      attempt({
+        model: 'fake/model:free',
+        messages: [],
+        timeoutMs: 30,
+        signal: controller.signal
+      }),
+      /cancelled/
+    )
+  } finally {
+    globalThis.fetch = original
+  }
+})
+

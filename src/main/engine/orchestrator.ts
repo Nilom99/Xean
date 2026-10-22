@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { AppConfig, Role } from '@shared/types'
+import type { AppConfig, Role, RunStatus } from '@shared/types'
 import { ROLES } from '@shared/types'
 import { bus } from './bus'
 import type { Budget } from './budget'
@@ -15,6 +15,7 @@ import { parsePlan, parseCommands } from './protocol'
 import { mergeCommands, filterPlatformCompatible } from './commands'
 import { TaskCycle, type TaskState } from './taskCycle'
 import { buildRunReport } from './report'
+import { computeRunStatus, validateTaskGraph, type VerificationSummary } from './runOutcome'
 import { truncateFileContent } from '../openrouter/context'
 import { OpenRouterClient, redactSecrets } from '../openrouter/client'
 import type { RoleAssignment } from '../openrouter/assignment'
@@ -31,6 +32,24 @@ export interface OrchestratorDeps {
   getAssignments: () => Record<Role, RoleAssignment>
 }
 
+/** One failed verification check, grouped for the repair loop. */
+interface VerificationFailure {
+  key: string
+  taskId: string
+  taskTitle: string
+  command: string
+  exitCode: number
+  stdout: string
+  stderr: string
+  /** False for user-denied commands, which must not trigger a repair task. */
+  repairEligible: boolean
+}
+
+interface VerificationResult {
+  ran: number
+  failures: VerificationFailure[]
+}
+
 /**
  * The multi-agent loop.
  *
@@ -45,6 +64,8 @@ export class Orchestrator {
   private running = false
   private aborted = false
   private currentRunId: string | null = null
+  /** Aborts in-flight provider requests and child processes on cancel. */
+  private abortController: AbortController | null = null
 
   constructor(private readonly deps: OrchestratorDeps) {}
 
@@ -56,18 +77,28 @@ export class Orchestrator {
     return this.currentRunId
   }
 
-  /** Ask the running run to stop; it finishes the current step first. */
+  /** Ask the running run to stop; in-flight requests are aborted too. */
   stop(): void {
-    if (!this.running) return
+    this.abortRun('Stopped by user.')
+  }
+
+  /** Abort the current run once, emitting a single RUN_ABORTED event. */
+  private abortRun(reason: string): void {
+    if (!this.running || this.aborted) return
     this.aborted = true
+    this.abortController?.abort()
     if (this.currentRunId) {
       bus.emitEvent({
         type: 'RUN_ABORTED',
         ts: Date.now(),
         runId: this.currentRunId,
-        reason: 'Stopped by user.'
+        reason
       })
     }
+  }
+
+  private get signal(): AbortSignal | undefined {
+    return this.abortController?.signal
   }
 
   /**
@@ -84,6 +115,7 @@ export class Orchestrator {
     this.running = true
     this.aborted = false
     this.currentRunId = runId
+    this.abortController = new AbortController()
     this.deps.budget.reset()
 
     const startedAt = Date.now()
@@ -100,14 +132,20 @@ export class Orchestrator {
     return runId
   }
 
-  /** Run the plan -> implement -> review -> verify -> merge pipeline. */
+  /** Run the plan -> implement -> review -> verify -> repair pipeline. */
   private async execute(
     runId: string,
     goal: string,
     startedAt: number,
     notes: string[]
   ): Promise<void> {
-    let status: 'done' | 'aborted' | 'failed' = 'done'
+    let status: ReturnType<typeof computeRunStatus> = 'done'
+    const config = this.deps.getConfig()
+    const runTimer = setTimeout(() => {
+      notes.push(`The run exceeded its ${Math.round(config.runTimeoutMs / 1000)}s time limit.`)
+      this.abortRun('Run exceeded its time limit.')
+    }, config.runTimeoutMs)
+
     try {
       // ---- 1. Plan ---------------------------------------------------------
       const planned = await this.createPlan(runId, goal)
@@ -121,18 +159,64 @@ export class Orchestrator {
           message: 'The planner produced no usable tasks; there is nothing to run.'
         })
         notes.push('The planner produced no usable tasks.')
+        status = 'failed'
       } else {
-        // ---- 2. Materialise the task board -------------------------------
-        const states = this.createTasks(runId, planned)
+        // Reject duplicate ids, missing dependencies and cycles before any
+        // task reaches the board — a malformed plan must never run.
+        const graphErrors = validateTaskGraph(planned)
+        if (graphErrors.length > 0) {
+          const message = `Invalid task dependency graph: ${graphErrors.join(' ')}`
+          bus.emitEvent({ type: 'ERROR', ts: Date.now(), runId, scope: 'orchestrator', message })
+          notes.push(message)
+          status = 'failed'
+        } else {
+          // ---- 2. Materialise the task board -----------------------------
+          const states = this.createTasks(runId, planned)
+          const allStates = [...states]
 
-        // ---- 3. Execute in parallel batches --------------------------------
-        await this.executeTasks(runId, states, notes)
+          // ---- 3. Execute in parallel batches ------------------------------
+          await this.executeTasks(runId, states, notes)
 
-        // ---- 4. Verify with the Runner ------------------------------------
-        await this.runVerification(runId, states, notes)
+          // ---- 4. Verify with the Runner ----------------------------------
+          let verification = await this.runVerification(runId, states, notes)
 
-        // ---- 5. Merge and summarise ---------------------------------------
-        await this.mergeResults(runId, goal, states, notes)
+          // ---- 5. Bounded repair loop -------------------------------------
+          // Repairs are executed inside the run loop, never appended after it.
+          const attempted = new Set<string>()
+          for (let attempt = 1; attempt <= config.maxRepairAttempts; attempt++) {
+            if (this.aborted || verification.failures.length === 0) break
+
+            const repairStates = this.createRepairTasks(runId, verification.failures, attempted)
+            if (repairStates.length === 0) break
+
+            notes.push(
+              `Repair attempt ${attempt}/${config.maxRepairAttempts}: ${repairStates.length} task(s).`
+            )
+            await this.executeTasks(runId, repairStates, notes)
+            allStates.push(...repairStates)
+
+            // Re-run every check, including the original ones, so a repair
+            // cannot hide an earlier failure.
+            verification = await this.runVerification(
+              runId,
+              allStates,
+              notes
+            )
+          }
+
+          // ---- 6. Merge and summarise -------------------------------------
+          await this.mergeResults(runId, goal, allStates, notes)
+
+          const verificationSummary: VerificationSummary = {
+            ran: verification.ran,
+            failed: verification.failures.length
+          }
+          status = computeRunStatus({
+            aborted: this.aborted,
+            tasks: this.deps.board.list(runId),
+            verification: verificationSummary
+          })
+        }
       }
 
       if (this.aborted) status = 'aborted'
@@ -142,9 +226,12 @@ export class Orchestrator {
       bus.emitEvent({ type: 'ERROR', ts: Date.now(), runId, scope: 'orchestrator', message })
       notes.push(message)
     } finally {
+      clearTimeout(runTimer)
+      this.aborted = this.aborted || status === 'aborted'
       await this.finish(runId, goal, startedAt, status, notes)
       this.running = false
       this.currentRunId = null
+      this.abortController = null
     }
   }
 
@@ -170,7 +257,9 @@ export class Orchestrator {
       runId,
       content: goal,
       scratchpad: `Existing files in the workspace:\n${fileList}\n\nBreak this goal into independent, concrete tasks.`,
-      temperature: 0.2
+      temperature: 0.2,
+      signal: this.signal,
+      timeoutMs: this.deps.getConfig().requestTimeoutMs
     })
 
     const parsed = parsePlan(response.content)
@@ -204,7 +293,7 @@ export class Orchestrator {
         role: p.role,
         dependsOn: []
       })
-      planIdToBoardId.set(p.id, task.id)
+      planIdToBoardId.set(p.id.trim(), task.id)
       bus.emitEvent({
         type: 'TASK_CREATED',
         ts: Date.now(),
@@ -226,7 +315,7 @@ export class Orchestrator {
     planned.forEach((p, index) => {
       const task = created[index].task
       const deps = p.dependsOn
-        .map((dep) => planIdToBoardId.get(dep))
+        .map((dep) => planIdToBoardId.get(dep.trim()))
         .filter((dep): dep is string => Boolean(dep) && dep !== task.id)
       task.dependsOn = deps
       task.updatedAt = Date.now()
@@ -250,22 +339,65 @@ export class Orchestrator {
   ): Promise<void> {
     const config = this.deps.getConfig()
     const maxParallel = Math.max(1, config.maxParallelTasks)
-    const cycle = new TaskCycle(this.deps, runId, () => this.aborted)
+    const cycle = new TaskCycle(this.deps, runId, () => this.aborted, this.signal)
     const pending = [...states]
     let guard = 0
 
-    while (pending.length > 0) {
-      if (++guard > 50) break
-      if (this.aborted) break
+    /** Mark a pending task blocked with a clear reason. */
+    const block = (state: TaskState, reason: string): void => {
+      try {
+        this.deps.board.transition(state.task.id, 'BLOCKED')
+      } catch {
+        this.deps.board.update(state.task.id, { status: 'BLOCKED' })
+      }
+      state.task.error = reason
+      notes.push(`Task "${state.task.title}" was not run: ${reason}`)
+    }
 
-      // A wave is the set of tasks whose dependencies are already satisfied.
-      const doneIds = new Set(
-        states.filter((s) => s.task.status === 'DONE').map((s) => s.task.id)
+    while (pending.length > 0) {
+      if (this.aborted) break
+      if (++guard > 50) {
+        for (const state of pending) block(state, 'the dependency scheduler did not converge.')
+        break
+      }
+
+      // A wave is the set of tasks whose dependencies have actually reached
+      // DONE on the board (repair tasks may depend on earlier plan tasks).
+      const wave = pending.filter((state) =>
+        state.task.dependsOn.every((dep) => this.deps.board.get(dep)?.status === 'DONE')
       )
-      const wave = pending.filter((s) =>
-        s.task.dependsOn.every((dep) => doneIds.has(dep))
-      )
-      const batch = wave.length > 0 ? wave : pending.slice(0, maxParallel)
+
+      if (wave.length === 0) {
+        // Never run a task just because nothing else is ready: that is how
+        // dependency cycles and failed prerequisites turn into silent,
+        // out-of-order execution.
+        const blockedByFailure = pending.filter((state) =>
+          state.task.dependsOn.some((dep) => {
+            const dependency = this.deps.board.get(dep)
+            return !dependency || dependency.status === 'FAILED' || dependency.status === 'BLOCKED'
+          })
+        )
+
+        if (blockedByFailure.length > 0) {
+          for (const state of blockedByFailure) {
+            const reason = 'a required dependency failed or is blocked.'
+            if (this.deps.board.get(state.task.id)?.status === 'PENDING') block(state, reason)
+            const index = pending.indexOf(state)
+            if (index >= 0) pending.splice(index, 1)
+          }
+          continue
+        }
+
+        const message = 'No runnable task remained; the dependency graph cannot be satisfied.'
+        bus.emitEvent({ type: 'ERROR', ts: Date.now(), runId, scope: 'orchestrator', message })
+        notes.push(message)
+        for (const state of pending) {
+          if (this.deps.board.get(state.task.id)?.status === 'PENDING') block(state, message)
+        }
+        break
+      }
+
+      const batch = wave
 
       for (let i = 0; i < batch.length; i += maxParallel) {
         const chunk = batch.slice(i, i + maxParallel)
@@ -288,10 +420,11 @@ export class Orchestrator {
               })
               try {
                 this.deps.board.transition(state.task.id, 'FAILED')
-                state.task.error = message
               } catch {
-                // the task may already be in a terminal state
+                // Force the error state when the task is already terminal.
+                this.deps.board.update(state.task.id, { status: 'FAILED' })
               }
+              state.task.error = message
             }
           })
         )
@@ -311,16 +444,23 @@ export class Orchestrator {
 
   // --------------------------------------------------------- verification ---
 
-  /** Let the Runner execute the proposed test/build commands. */
+  /**
+   * Let the Runner execute the proposed test/build commands.
+   *
+   * Returns every failed check; it does not mutate the task board. The
+   * orchestrator decides whether a bounded repair round should run, which
+   * keeps repairs inside the execution loop.
+   */
   private async runVerification(
     runId: string,
     states: TaskState[],
     notes: string[]
-  ): Promise<void> {
+  ): Promise<VerificationResult> {
     const withCommands = states.filter((s) => s.commands.length > 0)
     if (withCommands.length === 0) {
-      notes.push('No test commands were proposed, so the runner had nothing to execute.')
-      return
+      const note = 'No test commands were executed; the run is unverified.'
+      if (!notes.includes(note)) notes.push(note)
+      return { ran: 0, failures: [] }
     }
 
     const runner = new Agent('runner', {
@@ -330,34 +470,50 @@ export class Orchestrator {
       resolveModel: (role) => this.deps.getAssignments()[role].chain
     })
 
+    let ran = 0
+    const failures: VerificationFailure[] = []
+
     for (const state of withCommands) {
-      if (this.aborted) return
+      if (this.aborted) break
 
-      const response = await runner.send({
-        role: 'runner',
-        runId,
-        taskId: state.task.id,
-        content: `Verify the work for "${state.task.title}". The implementer proposed these commands: ${state.commands.join(
-          ', '
-        )}.`,
-        scratchpad: 'Choose the commands to run and report pass/fail.',
-        temperature: 0.1
-      })
+      let suggested: string[] = []
+      try {
+        const response = await runner.send({
+          role: 'runner',
+          runId,
+          taskId: state.task.id,
+          content: `Verify the work for "${state.task.title}". The implementer proposed these commands: ${state.commands.join(', ')}.`,
+          scratchpad: 'Choose the commands to run and report pass/fail.',
+          temperature: 0.1,
+          signal: this.signal,
+          timeoutMs: this.deps.getConfig().requestTimeoutMs
+        })
+        suggested = parseCommands(response.content)
+      } catch (err) {
+        // The implementer's commands are still usable when the Runner model
+        // is unavailable; verification must not silently disappear.
+        const message = redactSecrets(err instanceof Error ? err.message : String(err))
+        bus.emitEvent({
+          type: 'ERROR',
+          ts: Date.now(),
+          runId,
+          scope: 'runner',
+          message: `The Runner model failed (${message}); using the implementer's commands.`
+        })
+      }
 
-      const suggested = parseCommands(response.content)
       // The implementer's own commands are the primary source; the runner may
       // add to them, but it must not replace them with something unrelated.
       const merged = mergeCommands(state.commands, suggested)
       const { compatible, skipped } = filterPlatformCompatible(merged)
 
       for (const command of skipped) {
-        notes.push(
-          `Skipped the command "${command}" because it does not run on this platform.`
-        )
+        const note = `Skipped the command "${command}" because it does not run on this platform.`
+        if (!notes.includes(note)) notes.push(note)
       }
 
       for (const command of compatible) {
-        if (this.aborted) return
+        if (this.aborted) break
 
         bus.emitEvent({
           type: 'COMMAND_REQUEST',
@@ -392,10 +548,26 @@ export class Orchestrator {
             stderr: 'Denied by the user.',
             durationMs: 0
           })
+          failures.push({
+            key: `${state.task.id}|${command}|denied`,
+            taskId: state.task.id,
+            taskTitle: state.task.title,
+            command,
+            exitCode: 126,
+            stdout: '',
+            stderr: 'Denied by the user.',
+            // A denied command is a user decision, not a code defect.
+            repairEligible: false
+          })
           continue
         }
 
-        const result = await this.deps.sandbox.runCommand(command)
+        const result = await this.deps.sandbox.runCommand(
+          command,
+          this.deps.getConfig().commandTimeoutMs,
+          this.signal
+        )
+        ran++
 
         bus.emitEvent({
           type: 'COMMAND_RESULT',
@@ -410,32 +582,81 @@ export class Orchestrator {
         })
 
         if (result.exitCode !== 0) {
-          notes.push(
-            `Command "${command}" failed with exit code ${result.exitCode} for "${state.task.title}".`
-          )
-          // A failing check becomes a new task for the Implementer.
-          const failure = this.deps.board.create({
-            runId,
-            title: `Fix failing check: ${state.task.title}`,
-            description: `The command "${command}" failed with exit code ${result.exitCode}.\n\nstdout:\n${truncateFileContent(
-              result.stdout,
-              4000
-            )}\n\nstderr:\n${truncateFileContent(result.stderr, 4000)}`,
-            role: 'implementer'
-          })
-          bus.emitEvent({
-            type: 'TASK_CREATED',
-            ts: Date.now(),
-            runId,
-            taskId: failure.id,
-            title: failure.title,
-            description: failure.description,
-            role: 'implementer'
+          const firstOutputLine =
+            (result.stderr || result.stdout)
+              .split('\n')
+              .map((line) => line.trim())
+              .find((line) => line.length > 0)
+              ?.slice(0, 160) ?? ''
+          const note = `Command "${command}" failed with exit code ${result.exitCode} for "${state.task.title}".`
+          if (!notes.includes(note)) notes.push(note)
+          failures.push({
+            key: `${state.task.id}|${command}|${result.exitCode}|${firstOutputLine}`,
+            taskId: state.task.id,
+            taskTitle: state.task.title,
+            command,
+            exitCode: result.exitCode,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            repairEligible: true
           })
         }
       }
     }
+
+    if (ran === 0) {
+      const note = 'No test commands were executed; the run is unverified.'
+      if (!notes.includes(note)) notes.push(note)
+    }
+
+    return { ran, failures }
   }
+
+  /**
+   * Turn failed checks into implementer tasks, deduplicated across rounds.
+   * Returns at most three repair tasks per round to keep the loop bounded.
+   */
+  private createRepairTasks(
+    runId: string,
+    failures: VerificationFailure[],
+    attempted: Set<string>
+  ): TaskState[] {
+    const created: TaskState[] = []
+    for (const failure of failures) {
+      if (!failure.repairEligible) continue
+      if (attempted.has(failure.key)) continue
+      attempted.add(failure.key)
+
+      const task = this.deps.board.create({
+        runId,
+        title: `Fix failing check: ${failure.taskTitle}`,
+        description: `The command "${failure.command}" failed with exit code ${failure.exitCode}.\n\nstdout:\n${truncateFileContent(
+          failure.stdout,
+          4000
+        )}\n\nstderr:\n${truncateFileContent(failure.stderr, 4000)}`,
+        role: 'implementer'
+      })
+      bus.emitEvent({
+        type: 'TASK_CREATED',
+        ts: Date.now(),
+        runId,
+        taskId: task.id,
+        title: task.title,
+        description: task.description,
+        role: 'implementer'
+      })
+      created.push({
+        task,
+        reviewItems: [],
+        disagreements: 0,
+        approved: false,
+        commands: []
+      })
+      if (created.length >= 3) break
+    }
+    return created
+  }
+
 
   // --------------------------------------------------------------- merge ----
 
@@ -465,7 +686,9 @@ export class Orchestrator {
         }\n\nFiles changed: ${files.join(', ') || 'none'}\n\nOutstanding notes:\n${
           notes.join('\n') || 'none'
         }\n\nWrite a short final summary (2-4 sentences) of what was built and what remains.`,
-        temperature: 0.3
+        temperature: 0.3,
+        signal: this.signal,
+        timeoutMs: this.deps.getConfig().requestTimeoutMs
       })
       summary = response.content.trim() || summary
     } catch {
@@ -489,7 +712,7 @@ export class Orchestrator {
     runId: string,
     goal: string,
     startedAt: number,
-    status: 'done' | 'aborted' | 'failed',
+    status: RunStatus,
     notes: string[]
   ): Promise<void> {
     const endedAt = Date.now()
@@ -527,16 +750,26 @@ export class Orchestrator {
       })
     }
 
-    this.deps.store.saveRun({
-      runId,
-      goal,
-      status,
-      startedAt,
-      endedAt,
-      tasks: tasks.length,
-      reportPath
-    })
-    for (const task of tasks) this.deps.store.saveTask(task)
+    try {
+      this.deps.store.saveRun({
+        runId,
+        goal,
+        status,
+        startedAt,
+        endedAt,
+        tasks: tasks.length,
+        reportPath
+      })
+      for (const task of tasks) this.deps.store.saveTask(task)
+    } catch (err) {
+      bus.emitEvent({
+        type: 'ERROR',
+        ts: Date.now(),
+        runId,
+        scope: 'persistence',
+        message: redactSecrets(err instanceof Error ? err.message : String(err))
+      })
+    }
 
     bus.emitEvent({
       type: 'RUN_FINISHED',

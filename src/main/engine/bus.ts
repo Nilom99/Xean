@@ -26,8 +26,12 @@ export class Bus extends EventEmitter {
     this.log.push(event)
     try {
       this.persistFn?.(event)
-    } catch {
-      // Persistence must never break the run.
+    } catch (err) {
+      // Persistence must never break the run, but it must not be silent.
+      console.error(
+        '[codex-local] failed to persist engine event:',
+        err instanceof Error ? err.message : String(err)
+      )
     }
     this.emit('event', event)
     this.emit(event.type, event)

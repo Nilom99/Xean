@@ -14,6 +14,10 @@ export const DEFAULT_CONFIG: AppConfig = {
   tokenBudget: 400_000,
   autoApproveWrites: false,
   theme: 'dark',
+  maxRepairAttempts: 2,
+  requestTimeoutMs: 120_000,
+  commandTimeoutMs: 120_000,
+  runTimeoutMs: 3_600_000,
   roles: {
     orchestrator: {
       alias: 'minimax 3.1 flash',

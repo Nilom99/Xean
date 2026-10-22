@@ -26,12 +26,17 @@ export const DEFAULT_MAX_TOKENS = 8192
  */
 export const DEFAULT_REASONING_MAX_TOKENS = 1024
 
+/** Default timeout for one request when the caller does not set one. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
+
 export type ClientErrorKind =
   | 'auth'
   | 'credits'
   | 'rate_limit'
   | 'server'
   | 'network'
+  | 'timeout'
+  | 'cancelled'
   | 'blocked'
   /**
    * The model itself is gone or not served to this account (404 / 403).
@@ -43,14 +48,21 @@ export type ClientErrorKind =
   | 'model_unavailable'
 
 export class OpenRouterError extends Error {
+  readonly kind: ClientErrorKind
+  readonly status?: number
+  readonly retryAfterMs?: number
+
   constructor(
     message: string,
-    readonly kind: ClientErrorKind,
-    readonly status?: number,
-    readonly retryAfterMs?: number
+    kind: ClientErrorKind,
+    status?: number,
+    retryAfterMs?: number
   ) {
     super(message)
     this.name = 'OpenRouterError'
+    this.kind = kind
+    this.status = status
+    this.retryAfterMs = retryAfterMs
   }
 }
 
@@ -66,6 +78,8 @@ export interface ChatRequest {
   maxTokens?: number
   stop?: string[]
   signal?: AbortSignal
+  /** Timeout for this request (ms). Defaults to 120s. */
+  timeoutMs?: number
   onDelta?: (text: string) => void
   /**
    * Cap on the tokens a reasoning model may spend thinking.
@@ -120,7 +134,11 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * - Every request is guarded by `assertFreeModel`.
  */
 export class OpenRouterClient {
-  constructor(private readonly getApiKey: () => string | null) {}
+  private readonly getApiKey: () => string | null
+
+  constructor(getApiKey: () => string | null) {
+    this.getApiKey = getApiKey
+  }
 
   private headers(): Record<string, string> {
     const key = this.getApiKey()
@@ -171,7 +189,9 @@ export class OpenRouterClient {
           continue
         }
 
-        if (err.kind === 'server' || err.kind === 'network') {
+        if (err.kind === 'cancelled') throw err
+
+        if (err.kind === 'server' || err.kind === 'network' || err.kind === 'timeout') {
           if (serverRetries >= MAX_SERVER_RETRIES) throw err
           serverRetries++
           await sleep(1_000 * 2 ** serverRetries, request.signal)
@@ -199,15 +219,28 @@ export class OpenRouterClient {
     }
 
     let res: Response
+    const timeoutMs = request.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    const timeoutSignal = AbortSignal.timeout(timeoutMs)
+    const signal = request.signal
+      ? AbortSignal.any([request.signal, timeoutSignal])
+      : timeoutSignal
     try {
       res = await fetch(API_URL, {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify(body),
-        signal: request.signal
+        signal
       })
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') throw err
+      if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+        if (request.signal?.aborted) {
+          throw new OpenRouterError('The request was cancelled.', 'cancelled')
+        }
+        throw new OpenRouterError(
+          `OpenRouter did not answer within ${Math.round(timeoutMs / 1000)}s.`,
+          'timeout'
+        )
+      }
       throw new OpenRouterError(
         `Network error reaching OpenRouter: ${redactSecrets(
           err instanceof Error ? err.message : String(err)
