@@ -1,0 +1,57 @@
+{
+  "name": "codex-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Offline-first, multi-agent AI coding workspace powered exclusively by free OpenRouter models.",
+  "type": "module",
+  "main": "out/main/index.js",
+  "author": "Abdus Nilom",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "start": "electron-vite build && electron-vite preview",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "node --test --experimental-strip-types --import ./scripts/ts-register.mjs scripts/engine.test.mts",
+    "doctor": "node scripts/doctor.mjs",
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "diff": "^9.0.0",
+    "dotenv": "^18.0.8",
+    "execa": "^9.0.0",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/diff": "^8.0.0",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.4",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "electron": "^45.0.0",
+    "electron-vite": "^6.0.0",
+    "highlight.js": "^11.12.0",
+    "lucide-react": "^1.61.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5"
+  }
+}

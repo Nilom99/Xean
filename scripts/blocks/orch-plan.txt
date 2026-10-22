@@ -1,0 +1,144 @@
+
+  // ---------------------------------------------------------------- plan ---
+
+  /** Ask the Orchestrator model to decompose the goal into a task list. */
+  private async createPlan(
+    runId: string,
+    goal: string
+  ): Promise<ReturnType<typeof parsePlan>['tasks']> {
+    const orchestrator = new Agent('orchestrator', {
+      client: this.deps.client,
+      budget: this.deps.budget,
+      bus,
+      resolveModel: (role) => this.deps.getAssignments()[role].chain
+    })
+
+    const files = await this.deps.sandbox.listFiles(60)
+    const fileList = files.length > 0 ? files.join('\n') : '(the workspace is empty)'
+
+    const response = await orchestrator.send({
+      role: 'orchestrator',
+      runId,
+      content: goal,
+      scratchpad: `Existing files in the workspace:\n${fileList}\n\nBreak this goal into independent, concrete tasks.`,
+      temperature: 0.2
+    })
+
+    const parsed = parsePlan(response.content)
+    bus.emitEvent({
+      type: 'MESSAGE',
+      ts: Date.now(),
+      runId,
+      from: 'orchestrator',
+      to: 'user',
+      body: parsed.summary || `Plan ready: ${parsed.tasks.length} task(s).`
+    })
+    return parsed.tasks
+  }
+
+  /** Create the task records and emit the TASK_CREATED events. */
+  private createTasks(
+    runId: string,
+    planned: ReturnType<typeof parsePlan>['tasks']
+  ): TaskState[] {
+    return planned.map((p) => {
+      const task = this.deps.board.create({
+        runId,
+        title: p.title,
+        description: p.description,
+        role: p.role,
+        dependsOn: p.dependsOn
+      })
+      bus.emitEvent({
+        type: 'TASK_CREATED',
+        ts: Date.now(),
+        runId,
+        taskId: task.id,
+        title: task.title,
+        description: task.description,
+        role: task.role
+      })
+      return {
+        task,
+        reviewItems: [],
+        disagreements: 0,
+        approved: false,
+        commands: []
+      }
+    })
+  }
+
+  // ------------------------------------------------------------ execution ---
+
+  /**
+   * Execute every task.
+   *
+   * Independent tasks run in parallel (Promise.all) up to maxParallelTasks;
+   * tasks that depend on others run in a later wave.
+   */
+  private async executeTasks(
+    runId: string,
+    states: TaskState[],
+    notes: string[]
+  ): Promise<void> {
+    const config = this.deps.getConfig()
+    const maxParallel = Math.max(1, config.maxParallelTasks)
+    const cycle = new TaskCycle(this.deps, runId, () => this.aborted)
+
+    const pending = [...states]
+    let guard = 0
+
+    while (pending.length > 0) {
+      if (++guard > 50) break
+      if (this.aborted) break
+
+      // A wave is the set of tasks whose dependencies are already satisfied.
+      const doneIds = new Set(
+        states.filter((s) => s.task.status === 'DONE').map((s) => s.task.id)
+      )
+      const wave = pending.filter((s) =>
+        s.task.dependsOn.every((dep) => doneIds.has(dep))
+      )
+      const batch = wave.length > 0 ? wave : pending.slice(0, maxParallel)
+
+      for (let i = 0; i < batch.length; i += maxParallel) {
+        const chunk = batch.slice(i, i + maxParallel)
+        if (this.aborted) break
+
+        await Promise.all(
+          chunk.map(async (state) => {
+            try {
+              await cycle.run(state)
+            } catch (err) {
+              const message = redactSecrets(
+                err instanceof Error ? err.message : String(err)
+              )
+              bus.emitEvent({
+                type: 'ERROR',
+                ts: Date.now(),
+                runId,
+                scope: `task:${state.task.id}`,
+                message
+              })
+              try {
+                this.deps.board.transition(state.task.id, 'FAILED')
+                state.task.error = message
+              } catch {
+                // the task may already be in a terminal state
+              }
+            }
+          })
+        )
+      }
+
+      for (const state of batch) {
+        const index = pending.indexOf(state)
+        if (index >= 0) pending.splice(index, 1)
+      }
+    }
+
+    const failed = states.filter((s) => s.task.status === 'FAILED')
+    for (const state of failed) {
+      notes.push(`Task "${state.task.title}" failed: ${state.task.error ?? 'unknown error'}`)
+    }
+  }

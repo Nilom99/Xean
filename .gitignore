@@ -1,0 +1,59 @@
+node_modules/
+out/
+dist/
+.codex-local/
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+workspace/
+logs/
+.DS_Store
+Thumbs.db
+*.log
+
+# Scratch workspaces created while developing / testing the engine
+workspace-*/
+
+# Packaging output
+Build/
+release/
+*.tsbuildinfo
+
+# Local run / probe harness output
+*.out
+*.err
+harness.*
+probe-*.txt
+deltas-latest.txt
+
+# Screenshots and screen recordings captured locally
+seq-*.png
+shot-*.png
+shot-*.jpg
+
+
+# Scratch workspaces created while developing / testing the engine
+workspace-*/
+
+# Packaging output
+Build/
+release/
+*.tsbuildinfo
+
+# Local run / probe harness output
+*.out
+*.err
+harness.*
+probe-*.txt
+deltas-latest.txt
+
+# Screenshots and screen recordings captured locally
+seq-*.png
+shot-*.png
+shot-*.jpg

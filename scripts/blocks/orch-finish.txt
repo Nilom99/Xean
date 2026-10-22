@@ -1,0 +1,110 @@
+
+  // --------------------------------------------------------------- merge ----
+
+  /** Ask the Orchestrator for a final summary of the run. */
+  private async mergeResults(
+    runId: string,
+    goal: string,
+    states: TaskState[],
+    notes: string[]
+  ): Promise<void> {
+    const done = states.filter((s) => s.task.status === 'DONE')
+    const files = [...new Set(states.flatMap((s) => s.task.patches.map((p) => p.path)))]
+
+    let summary = `${done.length} of ${states.length} task(s) completed.`
+    try {
+      const orchestrator = new Agent('orchestrator', {
+        client: this.deps.client,
+        budget: this.deps.budget,
+        bus,
+        resolveModel: (role) => this.deps.getAssignments()[role].chain
+      })
+      const response = await orchestrator.send({
+        role: 'orchestrator',
+        runId,
+        content: `Goal: ${goal}\n\nCompleted tasks: ${
+          done.map((s) => s.task.title).join(', ') || 'none'
+        }\n\nFiles changed: ${files.join(', ') || 'none'}\n\nOutstanding notes:\n${
+          notes.join('\n') || 'none'
+        }\n\nWrite a short final summary (2-4 sentences) of what was built and what remains.`,
+        temperature: 0.3
+      })
+      summary = response.content.trim() || summary
+    } catch {
+      // Keep the deterministic summary when the model is unavailable.
+    }
+
+    bus.emitEvent({
+      type: 'MESSAGE',
+      ts: Date.now(),
+      runId,
+      from: 'orchestrator',
+      to: 'user',
+      body: summary
+    })
+  }
+
+  // -------------------------------------------------------------- finish ----
+
+  /** Persist the run and always leave a RUN_REPORT.md in the workspace. */
+  private async finish(
+    runId: string,
+    goal: string,
+    startedAt: number,
+    status: 'done' | 'aborted' | 'failed',
+    notes: string[]
+  ): Promise<void> {
+    const endedAt = Date.now()
+    const tasks = this.deps.board.list(runId)
+    const assignments = this.deps.getAssignments()
+
+    const models: Record<string, string> = {}
+    for (const role of ROLES) {
+      models[role] = assignments[role].primary ?? 'unassigned'
+    }
+
+    const report = buildRunReport({
+      runId,
+      goal,
+      status,
+      startedAt,
+      endedAt,
+      tasks,
+      usage: this.deps.budget.snapshot(),
+      perModel: this.deps.budget.perModelTotals(),
+      models,
+      notes
+    })
+
+    const reportPath = path.join(this.deps.sandbox.rootPath, 'RUN_REPORT.md')
+    try {
+      await fs.writeFile(reportPath, report, 'utf8')
+    } catch (err) {
+      bus.emitEvent({
+        type: 'ERROR',
+        ts: Date.now(),
+        runId,
+        scope: 'report',
+        message: redactSecrets(err instanceof Error ? err.message : String(err))
+      })
+    }
+
+    this.deps.store.saveRun({
+      runId,
+      goal,
+      status,
+      startedAt,
+      endedAt,
+      tasks: tasks.length,
+      reportPath
+    })
+    for (const task of tasks) this.deps.store.saveTask(task)
+
+    bus.emitEvent({
+      type: 'RUN_FINISHED',
+      ts: endedAt,
+      runId,
+      status,
+      summary: notes.length > 0 ? notes.join(' ') : 'Run finished.'
+    })
+  }

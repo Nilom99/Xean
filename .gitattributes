@@ -1,0 +1,13 @@
+# Normalize line endings to LF in the repository, regardless of platform.
+* text=auto eol=lf
+
+# Shell scripts and launchers must keep LF so they run on macOS / Linux.
+*.sh      text eol=lf
+*.command text eol=lf
+*.bat     text eol=crlf
+
+# Binary assets
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.icns binary

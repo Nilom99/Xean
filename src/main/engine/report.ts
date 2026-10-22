@@ -1,0 +1,160 @@
+import type { Task, UsageTotals } from '@shared/types'
+
+export interface ReportInput {
+  runId: string
+  goal: string
+  status: 'done' | 'aborted' | 'failed'
+  startedAt: number
+  endedAt: number
+  tasks: Task[]
+  usage: UsageTotals
+  perModel: Record<string, UsageTotals>
+  models: Record<string, string>
+  notes: string[]
+}
+
+/**
+ * Build the RUN_REPORT.md body.
+ *
+ * The report is always written — even for aborted runs — so the workspace is
+ * left in a consistent, explainable state.
+ */
+export function buildRunReport(input: ReportInput): string {
+  const lines: string[] = []
+  const failed = input.tasks.filter((t) => t.status === 'FAILED')
+  const blocked = input.tasks.filter((t) => t.status === 'BLOCKED')
+
+  lines.push('# Run Report')
+  lines.push('')
+  lines.push(`- **Goal:** ${input.goal}`)
+  lines.push(`- **Run id:** ${input.runId}`)
+  lines.push(`- **Status:** ${input.status.toUpperCase()}`)
+  lines.push(`- **Started:** ${new Date(input.startedAt).toISOString()}`)
+  lines.push(`- **Finished:** ${new Date(input.endedAt).toISOString()}`)
+  lines.push(
+    `- **Duration:** ${Math.max(1, Math.round((input.endedAt - input.startedAt) / 1000))}s`
+  )
+  lines.push(
+    `- **Tokens:** ${input.usage.promptTokens.toLocaleString()} prompt / ${input.usage.completionTokens.toLocaleString()} completion across ${input.usage.requests} requests`
+  )
+  lines.push('')
+
+  lines.push('## Models (free tier only)')
+  lines.push('')
+  lines.push('| Role | Model |')
+  lines.push('| --- | --- |')
+  for (const [role, model] of Object.entries(input.models)) {
+    lines.push(`| ${role} | \`${model}\` |`)
+  }
+  lines.push('')
+
+  lines.push('## Tasks')
+  lines.push('')
+  lines.push('| Task | Role | Status | Iterations |')
+  lines.push('| --- | --- | --- | --- |')
+  for (const task of input.tasks) {
+    lines.push(
+      `| ${escapePipes(task.title)} | ${task.role} | ${task.status} | ${task.iteration} |`
+    )
+  }
+  lines.push('')
+
+  lines.push('## Files changed')
+  lines.push('')
+  const changed = new Map<string, { added: number; removed: number }>()
+  for (const task of input.tasks) {
+    for (const patch of task.patches) {
+      const prev = changed.get(patch.path) ?? { added: 0, removed: 0 }
+      changed.set(patch.path, {
+        added: prev.added + patch.added,
+        removed: prev.removed + patch.removed
+      })
+    }
+  }
+  if (changed.size === 0) {
+    lines.push('_No files were written._')
+  } else {
+    lines.push('| File | Added | Removed |')
+    lines.push('| --- | --- | --- |')
+    for (const [file, counts] of changed) {
+      lines.push(`| \`${file}\` | +${counts.added} | -${counts.removed} |`)
+    }
+  }
+  lines.push('')
+
+  lines.push('## Review verdicts')
+  lines.push('')
+  const reviewed = input.tasks.filter((t) => t.verdict)
+  if (reviewed.length === 0) {
+    lines.push('_No reviews were completed._')
+  } else {
+    for (const task of reviewed) {
+      lines.push(`- **${task.title}** — ${task.verdict}`)
+      for (const item of task.reviewItems) {
+        const where = item.file ? ` (${item.file}${item.line ? `:${item.line}` : ''})` : ''
+        lines.push(`  - ${item.severity}: ${item.title}${where} — ${item.detail}`)
+      }
+    }
+  }
+  lines.push('')
+
+  if (input.notes.length > 0) {
+    lines.push('## Notes')
+    lines.push('')
+    for (const note of input.notes) lines.push(`- ${note}`)
+    lines.push('')
+  }
+
+  lines.push('## What remains')
+  lines.push('')
+  const remaining: string[] = []
+  for (const task of failed) {
+    remaining.push(`**${task.title}** failed${task.error ? `: ${task.error}` : ''}`)
+  }
+  for (const task of blocked) {
+    remaining.push(`**${task.title}** was blocked and needs a human decision.`)
+  }
+  for (const task of input.tasks) {
+    if (task.status === 'CHANGES_REQUESTED' || task.status === 'IN_REVIEW') {
+      remaining.push(`**${task.title}** stopped at ${task.status}.`)
+    }
+  }
+
+  if (remaining.length > 0) {
+    for (const item of remaining) lines.push(`- ${item}`)
+  } else if (input.tasks.length === 0) {
+    // Nothing was ever planned, so there is nothing that could have completed.
+    lines.push(
+      input.status === 'done'
+        ? 'No tasks were planned for this goal.'
+        : 'The run ended before any task could be planned — see the notes above.'
+    )
+  } else if (input.status === 'done') {
+    lines.push('Nothing outstanding — every task completed successfully.')
+  } else {
+    // The run did not finish, so no task may be called complete even when none
+    // of them is individually marked as failed.
+    const unfinished = input.tasks.filter((t) => t.status !== 'DONE')
+    for (const task of unfinished) {
+      lines.push(`- **${task.title}** is still ${task.status}.`)
+    }
+    if (unfinished.length === 0) {
+      lines.push(
+        `The run ended as ${input.status.toUpperCase()} after every task reached DONE — see the notes above.`
+      )
+    }
+  }
+  lines.push('')
+  lines.push('---')
+  lines.push('')
+  lines.push(
+    `_Generated by Codex Local on ${new Date(input.endedAt).toISOString()} — all models used were free-tier OpenRouter models._`
+  )
+  lines.push('')
+
+  return lines.join('\n')
+}
+
+function escapePipes(text: string): string {
+  return text.replace(/\|/g, '\\|')
+}

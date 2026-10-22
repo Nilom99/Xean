@@ -1,0 +1,63 @@
+{
+  "workspaceRoot": "./workspace",
+  "freeOnly": true,
+  "iterationsPerTask": 3,
+  "maxParallelTasks": 3,
+  "tokenBudget": 400000,
+  "autoApproveWrites": false,
+  "theme": "dark",
+  "roles": {
+    "orchestrator": {
+      "alias": "minimax 3.1 flash",
+      "preferred": [
+        "minimax/minimax-m3.1-flash:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free"
+      ],
+      "fallbacks": [
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "thinkingmachines/inkling:free"
+      ],
+      "model": "minimax/minimax-m3.1-flash:free"
+    },
+    "implementer": {
+      "alias": "lfm2.5",
+      "preferred": [
+        "liquid/lfm-2.5-2.6b:free",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "google/gemma-4-31b-it:free"
+      ],
+      "fallbacks": [
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "google/gemma-4-26b-a4b-it:free"
+      ],
+      "model": "minimax/minimax-m3.1-flash:free"
+    },
+    "reviewer": {
+      "alias": "dots3preview",
+      "preferred": [
+        "dots-studio/dots-3-note-preview:free",
+        "thinkingmachines/inkling:free",
+        "poolside/laguna-s-2.1:free"
+      ],
+      "fallbacks": [
+        "poolside/laguna-s-2.1:free",
+        "thinkingmachines/inkling:free"
+      ],
+      "model": "minimax/minimax-m3.1-flash:free"
+    },
+    "runner": {
+      "alias": "north mini code",
+      "preferred": [
+        "cohere/north-mini-code:free",
+        "poolside/laguna-xs-2.1:free",
+        "thinkingmachines/inkling-small:free"
+      ],
+      "fallbacks": [
+        "poolside/laguna-xs-2.1:free",
+        "thinkingmachines/inkling-small:free"
+      ],
+      "model": "minimax/minimax-m3.1-flash:free"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "src/main/engine/roles.ts": [
+    [
+      "  const rawItems = Array.isArray(raw.items) ? raw.items : []\n  const items: ReviewItem[] = rawItems\n    .map((entry, index) => {\n      if (!entry || typeof entry !== 'object') return null\n      const obj = entry as Record<string, unknown>\n      const severityRaw = String(obj.severity ?? 'minor').toLowerCase()\n      const severity: ReviewItem['severity'] =\n        severityRaw === 'blocker' || severityRaw === 'major' ? severityRaw : 'minor'\n      const title = asString(obj.title, `Issue ${index + 1}`)\n      const detail = asString(obj.detail, asString(obj.description, title))\n      const file = typeof obj.file === 'string' ? obj.file : undefined\n      const line = typeof obj.line === 'number' ? obj.line : undefined\n      return { id: asString(obj.id, String(index + 1)), severity, title, detail, file, line }\n    })\n    .filter((item): item is ReviewItem => item !== null)",
+      "  const rawItems = Array.isArray(raw.items) ? raw.items : []\n  const items: ReviewItem[] = []\n  rawItems.forEach((entry, index) => {\n    if (!entry || typeof entry !== 'object') return\n    const obj = entry as Record<string, unknown>\n    const severityRaw = String(obj.severity ?? 'minor').toLowerCase()\n    const severity: ReviewItem['severity'] =\n      severityRaw === 'blocker' || severityRaw === 'major' ? severityRaw : 'minor'\n    const title = asString(obj.title, `Issue ${index + 1}`)\n    const detail = asString(obj.detail, asString(obj.description, title))\n    const item: ReviewItem = { id: asString(obj.id, String(index + 1)), severity, title, detail }\n    if (typeof obj.file === 'string') item.file = obj.file\n    if (typeof obj.line === 'number') item.line = obj.line\n    items.push(item)\n  })"
+    ]
+  ],
+  "src/main/engine/report.ts": [
+    [
+      "  const done = input.tasks.filter((t) => t.status === 'DONE')\n  const failed",
+      "  const failed"
+    ]
+  ],
+  "src/main/openrouter/context.ts": [
+    [
+      "  private get maxFileChars(): number {\n    return this.options.maxFileChars ?? DEFAULT_MAX_FILE_CHARS\n  }\n\n",
+      ""
+    ]
+  ],
+  "src/main/engine/taskCycle.ts": [
+    [
+      "import type { Sandbox, SandboxError } from './sandbox'",
+      "import { SandboxError, type Sandbox } from './sandbox'"
+    ]
+  ]
+}

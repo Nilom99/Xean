@@ -1,0 +1,118 @@
+
+  // --------------------------------------------------------- verification ---
+
+  /** Let the Runner execute the proposed test/build commands. */
+  private async runVerification(
+    runId: string,
+    states: TaskState[],
+    notes: string[]
+  ): Promise<void> {
+    const withCommands = states.filter((s) => s.commands.length > 0)
+    if (withCommands.length === 0) {
+      notes.push('No test commands were proposed, so the runner had nothing to execute.')
+      return
+    }
+
+    const runner = new Agent('runner', {
+      client: this.deps.client,
+      budget: this.deps.budget,
+      bus,
+      resolveModel: (role) => this.deps.getAssignments()[role].chain
+    })
+
+    for (const state of withCommands) {
+      if (this.aborted) return
+
+      const response = await runner.send({
+        role: 'runner',
+        runId,
+        taskId: state.task.id,
+        content: `Verify the work for "${state.task.title}". The implementer proposed these commands: ${state.commands.join(
+          ', '
+        )}.`,
+        scratchpad: 'Choose the commands to run and report pass/fail.',
+        temperature: 0.1
+      })
+
+      const suggested = parseCommands(response.content)
+      const toRun = suggested.length > 0 ? suggested : state.commands
+
+      for (const command of toRun) {
+        if (this.aborted) return
+
+        bus.emitEvent({
+          type: 'COMMAND_REQUEST',
+          ts: Date.now(),
+          runId,
+          taskId: state.task.id,
+          from: 'runner',
+          command,
+          cwd: this.deps.sandbox.rootPath
+        })
+
+        const decision = await this.deps.approvals.request(
+          'command',
+          `Run command in ${this.deps.sandbox.rootPath}:\n${command}`,
+          {
+            command,
+            cwd: this.deps.sandbox.rootPath,
+            workspaceRoot: this.deps.sandbox.rootPath
+          }
+        )
+
+        if (!decision.allowed) {
+          bus.emitEvent({
+            type: 'COMMAND_RESULT',
+            ts: Date.now(),
+            runId,
+            taskId: state.task.id,
+            command,
+            exitCode: 126,
+            stdout: '',
+            stderr: 'Denied by the user.',
+            durationMs: 0
+          })
+          continue
+        }
+
+        const result = await this.deps.sandbox.runCommand(command)
+
+        bus.emitEvent({
+          type: 'COMMAND_RESULT',
+          ts: Date.now(),
+          runId,
+          taskId: state.task.id,
+          command,
+          exitCode: result.exitCode,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          durationMs: result.durationMs
+        })
+
+        if (result.exitCode !== 0) {
+          notes.push(
+            `Command "${command}" failed with exit code ${result.exitCode} for "${state.task.title}".`
+          )
+          // A failing check becomes a new task for the Implementer.
+          const failure = this.deps.board.create({
+            runId,
+            title: `Fix failing check: ${state.task.title}`,
+            description: `The command "${command}" failed with exit code ${result.exitCode}.\n\nstdout:\n${truncateFileContent(
+              result.stdout,
+              4000
+            )}\n\nstderr:\n${truncateFileContent(result.stderr, 4000)}`,
+            role: 'implementer'
+          })
+          bus.emitEvent({
+            type: 'TASK_CREATED',
+            ts: Date.now(),
+            runId,
+            taskId: failure.id,
+            title: failure.title,
+            description: failure.description,
+            role: 'implementer'
+          })
+        }
+      }
+    }
+  }
