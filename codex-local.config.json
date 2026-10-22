@@ -5,7 +5,7 @@
   "maxParallelTasks": 3,
   "tokenBudget": 400000,
   "autoApproveWrites": false,
-  "theme": "dark",
+  "theme": "light",
   "roles": {
     "orchestrator": {
       "alias": "minimax 3.1 flash",
@@ -18,7 +18,7 @@
         "nvidia/nemotron-3-super-120b-a12b:free",
         "thinkingmachines/inkling:free"
       ],
-      "model": "minimax/minimax-m3.1-flash:free"
+      "model": "openrouter/free"
     },
     "implementer": {
       "alias": "lfm2.5",
@@ -31,7 +31,7 @@
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "google/gemma-4-26b-a4b-it:free"
       ],
-      "model": "minimax/minimax-m3.1-flash:free"
+      "model": "openrouter/free"
     },
     "reviewer": {
       "alias": "dots3preview",
@@ -44,7 +44,7 @@
         "poolside/laguna-s-2.1:free",
         "thinkingmachines/inkling:free"
       ],
-      "model": "minimax/minimax-m3.1-flash:free"
+      "model": "openrouter/free"
     },
     "runner": {
       "alias": "north mini code",
@@ -57,7 +57,7 @@
         "poolside/laguna-xs-2.1:free",
         "thinkingmachines/inkling-small:free"
       ],
-      "model": "minimax/minimax-m3.1-flash:free"
+      "model": "openrouter/free"
     }
   }
 }

@@ -183,15 +183,49 @@ export class Sandbox {
   }
 
   /**
-   * Build a child environment without secrets. The OpenRouter key is never
-   * visible to agent-run shell commands.
+   * Build a child environment with strict secret scrubbing and an allowlist of safe variables.
    */
   private scrubbedEnv(): NodeJS.ProcessEnv {
+    const safeKeys = new Set([
+      'PATH',
+      'PATHEXT',
+      'SystemRoot',
+      'SYSTEMROOT',
+      'TEMP',
+      'TMP',
+      'USERPROFILE',
+      'HOME',
+      'LANG',
+      'LC_ALL',
+      'NODE_ENV',
+      'FORCE_COLOR',
+      'npm_config_prefix',
+      'APPDATA',
+      'LOCALAPPDATA',
+      'ComSpec'
+    ])
     const env: NodeJS.ProcessEnv = {}
     for (const [key, value] of Object.entries(process.env)) {
-      if (key === 'OPENROUTER_API_KEY' || key.startsWith('sk-or-')) continue
-      if (key.startsWith('CODEX_LOCAL_SECRET')) continue
-      env[key] = value
+      if (
+        key === 'OPENROUTER_API_KEY' ||
+        key.startsWith('sk-or-') ||
+        key.startsWith('CODEX_LOCAL_SECRET') ||
+        key.includes('KEY') ||
+        key.includes('SECRET') ||
+        key.includes('TOKEN') ||
+        key.includes('PASSWORD')
+      ) {
+        continue
+      }
+      if (safeKeys.has(key) || key.startsWith('npm_') || key.startsWith('VITE_')) {
+        if (value !== undefined) env[key] = value
+      }
+    }
+    // Also include standard platform environment variables if safe
+    for (const key of ['PATH', 'PATHEXT', 'SystemRoot', 'TEMP', 'TMP', 'HOME', 'ComSpec']) {
+      if (process.env[key] !== undefined) {
+        env[key] = process.env[key]
+      }
     }
     env.CODEX_LOCAL_SANDBOX = '1'
     env.CODEX_LOCAL_WORKSPACE = this.root

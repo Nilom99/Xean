@@ -97,6 +97,50 @@ export class TaskBoard {
     return task.dependsOn.every((dep) => this.tasks.get(dep)?.status === 'DONE')
   }
 
+  /** Validate dependency graph for cycles and missing tasks. Throws on error. */
+  validateGraph(runId?: string): void {
+    const list = this.list(runId)
+    const ids = new Set(list.map((t) => t.id))
+
+    for (const task of list) {
+      for (const dep of task.dependsOn) {
+        if (!ids.has(dep)) {
+          throw new Error(`Task "${task.id}" (${task.title}) depends on missing task ID "${dep}".`)
+        }
+        if (dep === task.id) {
+          throw new Error(`Task "${task.id}" cannot depend on itself.`)
+        }
+      }
+    }
+
+    // Cycle detection using DFS
+    const visiting = new Set<string>()
+    const visited = new Set<string>()
+
+    const dfs = (id: string): void => {
+      if (visiting.has(id)) {
+        throw new Error(`Circular dependency detected involving task "${id}".`)
+      }
+      if (visited.has(id)) return
+
+      visiting.add(id)
+      const task = this.tasks.get(id)
+      if (task) {
+        for (const dep of task.dependsOn) {
+          dfs(dep)
+        }
+      }
+      visiting.delete(id)
+      visited.add(id)
+    }
+
+    for (const task of list) {
+      if (!visited.has(task.id)) {
+        dfs(task.id)
+      }
+    }
+  }
+
   /** Tasks that are ready to be dispatched for a role. */
   readyFor(role: Role): Task[] {
     return this.list().filter(
