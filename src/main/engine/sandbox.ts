@@ -1,4 +1,5 @@
 import { execa } from 'execa'
+import { loadIgnoreRules, filterIgnored } from './codexignore'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
@@ -269,6 +270,8 @@ export class Sandbox {
     try {
       await fs.mkdir(this.root, { recursive: true })
       await walk(this.root)
+      const ignoreRules = await loadIgnoreRules(this)
+      return filterIgnored(out, ignoreRules)
     } catch {
       // workspace may not exist yet
     }

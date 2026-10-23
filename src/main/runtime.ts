@@ -47,7 +47,8 @@ export class Runtime {
       ...patch,
       // The free-only lock cannot be turned off.
       freeOnly: true,
-      roles: patch.roles ? normalizeRoles({ ...this.config, roles: patch.roles }) : this.config.roles
+      roles: patch.roles ? normalizeRoles({ ...this.config, roles: patch.roles }) : this.config.roles,
+      providers: patch.providers ? { ...this.config.providers, ...patch.providers } : this.config.providers
     }
 
     // Defence in depth: a model that is not in the live free list is dropped
@@ -75,6 +76,12 @@ export class Runtime {
     }
     this.config.roles[role] = { ...this.config.roles[role], model: modelId }
     this.recompute()
+    await saveConfig(this.config)
+  }
+
+  /** Update provider settings. */
+  async updateProviderSettings(settings: Partial<AppConfig['providers']>): Promise<void> {
+    this.config.providers = { ...this.config.providers, ...settings }
     await saveConfig(this.config)
   }
 

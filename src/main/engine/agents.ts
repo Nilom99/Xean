@@ -1,11 +1,4 @@
 import type { Role } from '@shared/types'
-import {
-  OpenRouterClient,
-  OpenRouterError,
-  redactSecrets,
-  DEFAULT_MAX_TOKENS,
-  DEFAULT_REASONING_MAX_TOKENS
-} from '../openrouter/client'
 import { catalog } from '../openrouter/catalog'
 import {
   modelHealth,
@@ -17,6 +10,10 @@ import type { Budget } from './budget'
 import type { Bus } from './bus'
 import { ContextWindow, type ChatMessage } from '../openrouter/context'
 import { ROLE_SYSTEM_PROMPTS, FORMAT_REMINDER } from './roles'
+import type { LlmClient } from '../providers/llmClient'
+import { OpenRouterError } from '../openrouter/client'
+import { redactSecrets } from '../openrouter/client'
+import { DEFAULT_MAX_TOKENS, DEFAULT_REASONING_MAX_TOKENS } from '../openrouter/client'
 
 /**
  * True when the failure was a model that answered with nothing.
@@ -33,17 +30,10 @@ export function isEmptyAnswerError(err: unknown): boolean {
 }
 
 export interface AgentDeps {
-  client: OpenRouterClient
+  client: LlmClient
   budget: Budget
   bus: Bus
-  /** Resolve the model for a role, honouring the configured fallback chain. */
   resolveModel: (role: Role) => string[]
-  /**
-   * Record of models that are currently refusing requests.
-   *
-   * Defaults to the process-wide registry, so one exhausted free model is not
-   * re-discovered (and re-waited-on) by every task of the run.
-   */
   health?: ModelHealth
 }
 

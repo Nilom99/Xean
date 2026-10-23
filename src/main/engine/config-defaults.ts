@@ -35,5 +35,12 @@ export const DEFAULT_CONFIG: AppConfig = {
       preferred: ['cohere/north-mini-code:free'],
       fallbacks: []
     }
+  },
+  providers: {
+    localFirst: true,
+    lmStudioEnabled: true,
+    ollamaEnabled: true,
+    lmStudioUrl: 'http://localhost:1234/v1',
+    ollamaUrl: 'http://localhost:11434'
   }
 }

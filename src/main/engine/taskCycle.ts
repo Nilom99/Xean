@@ -12,11 +12,11 @@ import { buildWorkspaceContext } from './workspaceContext'
 import { parseReview } from './roles'
 import { computeDiff } from './diff'
 import { truncateFileContent } from '../openrouter/context'
-import type { OpenRouterClient } from '../openrouter/client'
+import type { LlmClient } from '../providers/llmClient'
 import type { RoleAssignment } from '../openrouter/assignment'
 
 export interface TaskCycleDeps {
-  client: OpenRouterClient
+  client: LlmClient
   budget: Budget
   sandbox: Sandbox
   board: TaskBoard

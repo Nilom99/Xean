@@ -14,6 +14,8 @@ export const ROLE_LABELS: Record<Role, string> = {
   runner: 'Runner'
 }
 
+export type RunState = 'QUEUED' | 'RUNNING' | 'VERIFYING' | 'SUCCEEDED' | 'FAILED' | 'PARTIALLY_SUCCEEDED' | 'CANCELLED';
+
 export type TaskStatus =
   | 'PENDING'
   | 'ASSIGNED'
@@ -64,6 +66,7 @@ export type EngineEvent =
   | { type: 'COMMAND_REQUEST'; ts: number; runId?: string; taskId: string; from: Role; command: string; cwd: string }
   | { type: 'COMMAND_RESULT'; ts: number; runId?: string; taskId: string; command: string; exitCode: number; stdout: string; stderr: string; durationMs: number }
   | { type: 'RUN_STARTED'; ts: number; runId: string; goal: string }
+  | { type: 'RUN_STATE_CHANGED'; ts: number; runId: string; from: RunState; to: RunState }
   | { type: 'RUN_FINISHED'; ts: number; runId: string; status: 'done' | 'aborted' | 'failed'; summary: string }
   | { type: 'RUN_ABORTED'; ts: number; runId: string; reason: string }
   | { type: 'APPROVAL_REQUIRED'; ts: number; runId?: string; id: string; kind: 'write' | 'command'; detail: string; payload: unknown }
@@ -108,6 +111,14 @@ export interface RoleModelConfig {
   model?: string
 }
 
+export interface ProviderSettings {
+  localFirst: boolean
+  lmStudioEnabled: boolean
+  ollamaEnabled: boolean
+  lmStudioUrl: string
+  ollamaUrl: string
+}
+
 export interface AppConfig {
   workspaceRoot: string
   freeOnly: boolean
@@ -117,6 +128,7 @@ export interface AppConfig {
   autoApproveWrites: boolean
   theme: 'dark' | 'light'
   roles: Record<Role, RoleModelConfig>
+  providers: ProviderSettings
 }
 
 export interface FreeModelInfo {

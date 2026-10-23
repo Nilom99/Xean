@@ -15,6 +15,14 @@ const RoleConfigSchema = z.object({
   model: z.string().optional()
 })
 
+const ProviderSettingsSchema = z.object({
+  localFirst: z.boolean().default(true),
+  lmStudioEnabled: z.boolean().default(true),
+  ollamaEnabled: z.boolean().default(true),
+  lmStudioUrl: z.string().default('http://localhost:1234/v1'),
+  ollamaUrl: z.string().default('http://localhost:11434')
+})
+
 const ConfigSchema = z.object({
   workspaceRoot: z.string().default('./workspace'),
   freeOnly: z.literal(true).default(true),
@@ -25,14 +33,19 @@ const ConfigSchema = z.object({
   theme: z.enum(['dark', 'light']).default('dark'),
   roles: z
     .object({
-      // Every role is optional: a hand-edited config that is missing one role
-      // must not throw away the whole file. normalizeRoles fills the gaps.
       orchestrator: RoleConfigSchema.optional(),
       implementer: RoleConfigSchema.optional(),
       reviewer: RoleConfigSchema.optional(),
       runner: RoleConfigSchema.optional()
     })
-    .default({})
+    .default({}),
+  providers: ProviderSettingsSchema.default({
+    localFirst: true,
+    lmStudioEnabled: true,
+    ollamaEnabled: true,
+    lmStudioUrl: 'http://localhost:1234/v1',
+    ollamaUrl: 'http://localhost:11434'
+  })
 })
 
 /**

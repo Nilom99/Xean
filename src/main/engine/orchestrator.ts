@@ -16,11 +16,12 @@ import { mergeCommands, filterPlatformCompatible } from './commands'
 import { TaskCycle, type TaskState } from './taskCycle'
 import { buildRunReport } from './report'
 import { truncateFileContent } from '../openrouter/context'
-import { OpenRouterClient, redactSecrets } from '../openrouter/client'
+import { redactSecrets } from '../openrouter/client'
 import type { RoleAssignment } from '../openrouter/assignment'
+import type { LlmClient } from '../providers/llmClient'
 
 export interface OrchestratorDeps {
-  client: OpenRouterClient
+  client: LlmClient
   budget: Budget
   sandbox: Sandbox
   board: TaskBoard
