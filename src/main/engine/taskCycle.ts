@@ -6,6 +6,9 @@ import type { Sandbox } from './sandbox'
 import { SandboxError } from './sandbox'
 import type { ApprovalGate } from './approvals'
 import type { DecisionGate } from './decision'
+import type { CheckpointManager } from './checkpoints'
+import type { AuditLog } from './audit'
+import { audit } from './audit'
 import { Agent } from './agents'
 import { parseProposedFiles, parseCommands } from './protocol'
 import { buildWorkspaceContext } from './workspaceContext'
@@ -22,6 +25,8 @@ export interface TaskCycleDeps {
   board: TaskBoard
   approvals: ApprovalGate
   decisions: DecisionGate
+  checkpoints?: CheckpointManager
+  auditLog?: AuditLog
   getConfig: () => AppConfig
   getAssignments: () => Record<Role, RoleAssignment>
 }
@@ -496,7 +501,32 @@ export class TaskCycle {
       )
     }
 
-    if (!decision.allowed) return 'denied'
+    if (!decision.allowed) {
+      if (this.deps.auditLog) {
+        audit.approvalDenied(this.deps.auditLog, this.runId, taskId, 'write')
+      }
+      return 'denied'
+    }
+
+    if (this.deps.auditLog) {
+      audit.approvalGranted(this.deps.auditLog, this.runId, taskId, 'write', decision.always)
+    }
+
+    // Create a checkpoint before performing file modifications
+    if (this.deps.checkpoints) {
+      const filePaths = proposed.map((f) => f.path)
+      const chk = await this.deps.checkpoints.createCheckpoint(
+        this.runId,
+        taskId,
+        `Pre-write snapshot for ${filePaths.length} file(s)`,
+        filePaths
+      )
+      if (this.deps.auditLog) {
+        for (const fp of filePaths) {
+          audit.checkpointCreated(this.deps.auditLog, this.runId, taskId, fp, chk.id)
+        }
+      }
+    }
 
     for (const file of proposed) {
       let before: string | null = null
@@ -508,6 +538,17 @@ export class TaskCycle {
 
       const absolute = await this.deps.sandbox.writeFile(file.path, file.content)
       const diff = computeDiff(file.path, before, file.content)
+
+      if (this.deps.auditLog) {
+        audit.fileWrite(
+          this.deps.auditLog,
+          this.runId,
+          taskId,
+          file.path,
+          Buffer.byteLength(file.content, 'utf8'),
+          before === null
+        )
+      }
 
       this.deps.board.appendPatch(taskId, {
         path: file.path,

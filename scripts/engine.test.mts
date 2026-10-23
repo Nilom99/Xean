@@ -19,9 +19,19 @@ import { parseJsonLoose, stripCodeFences, repairJson, asString } from '../src/ma
 import { computeDiff, parseUnifiedRows } from '../src/main/engine/diff.ts'
 import { reduceEngine, reduceEngineLog, countByStatus } from '../src/renderer/lib/events.ts'
 import { rankFiles, scoreFile, isTextFile, tokenize as ctxTokenize } from '../src/main/engine/workspaceContext.ts'
-import { mergeCommands, isPlatformCompatible, filterPlatformCompatible } from '../src/main/engine/commands.ts'
+import { mergeCommands, isPlatformCompatible, filterPlatformCompatible, classifyCommandRisk } from '../src/main/engine/commands.ts'
+import { parseFileSymbols, parseImports, resolveImportPath, analyzeImpact } from '../src/main/engine/symbolIndex.ts'
 import { parseProposedFiles, normalizeProposedPath } from '../src/main/engine/protocol.ts'
 import { buildRunReport, type ReportInput } from '../src/main/engine/report.ts'
+import { AuditLog, audit } from '../src/main/engine/audit.ts'
+import { CheckpointManager } from '../src/main/engine/checkpoints.ts'
+import { PatchPreviewManager } from '../src/main/engine/patchPreview.ts'
+import { ApprovalGate } from '../src/main/engine/approvals.ts'
+import { Sandbox } from '../src/main/engine/sandbox.ts'
+import { bus } from '../src/main/engine/bus.ts'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import os from 'node:os'
 import type { EngineEvent, Task } from '../src/shared/types.ts'
 
 // ---------------------------------------------------------------- json ----
@@ -595,3 +605,225 @@ test('failed and blocked tasks are listed before any completion claim', () => {
   assert.match(section, /\*\*Broken\*\* failed: boom/)
   assert.match(section, /\*\*Stuck\*\* was blocked/)
 })
+
+// ------------------------------------------------------ secret protection ----
+
+test('isTextFile rejects secret and credential files', () => {
+  assert.equal(isTextFile('.env'), false)
+  assert.equal(isTextFile('.env.local'), false)
+  assert.equal(isTextFile('.env.production'), false)
+  assert.equal(isTextFile('config/.env'), false)
+  assert.equal(isTextFile('server.pem'), false)
+  assert.equal(isTextFile('id_rsa'), false)
+  assert.equal(isTextFile('id_ed25519'), false)
+  assert.equal(isTextFile('credentials.json'), false)
+  assert.equal(isTextFile('secrets.yaml'), false)
+  assert.equal(isTextFile('.npmrc'), false)
+  assert.equal(isTextFile('.pypirc'), false)
+  assert.equal(isTextFile('.netrc'), false)
+  assert.equal(isTextFile('.aws/credentials'), false)
+  assert.equal(isTextFile('.ssh/config'), false)
+  assert.equal(isTextFile('.ssh/id_rsa'), false)
+  assert.equal(isTextFile('.vscode/settings.json'), false)
+  assert.equal(isTextFile('.idea/workspace.xml'), false)
+})
+
+test('isTextFile still accepts normal source files', () => {
+  assert.equal(isTextFile('src/server.ts'), true)
+  assert.equal(isTextFile('README.md'), true)
+  assert.equal(isTextFile('config.yml'), true)
+  assert.equal(isTextFile('package.json'), true)
+  assert.equal(isTextFile('index.html'), true)
+})
+
+// --------------------------------------------- phase 1: symbol index & risk ----
+
+test('parseFileSymbols extracts functions, classes, interfaces and variables', () => {
+  const code = `
+    export interface UserConfig {
+      id: string
+    }
+    export class Orchestrator {
+      run() {}
+    }
+    export function processTask() {
+      return true
+    }
+    const MAX_LIMIT = 50
+  `
+  const symbols = parseFileSymbols('test.ts', code)
+  assert.equal(symbols.length, 4)
+  assert.equal(symbols[0].name, 'UserConfig')
+  assert.equal(symbols[0].kind, 'interface')
+  assert.equal(symbols[1].name, 'Orchestrator')
+  assert.equal(symbols[1].kind, 'class')
+  assert.equal(symbols[2].name, 'processTask')
+  assert.equal(symbols[2].kind, 'function')
+  assert.equal(symbols[3].name, 'MAX_LIMIT')
+  assert.equal(symbols[3].kind, 'variable')
+})
+
+test('parseImports finds all imported modules', () => {
+  const code = `
+    import { app, BrowserWindow } from 'electron'
+    import path from 'node:path'
+    import { bus } from './bus'
+  `
+  const imports = parseImports('index.ts', code)
+  assert.deepEqual(imports, ['electron', 'node:path', './bus'])
+})
+
+test('resolveImportPath resolves relative typescript paths', () => {
+  const allFiles = new Set(['src/main/engine/bus.ts', 'src/shared/types.ts'])
+  const resolved = resolveImportPath('src/main/engine/orchestrator.ts', './bus', allFiles)
+  assert.equal(resolved, 'src/main/engine/bus.ts')
+
+  const sharedResolved = resolveImportPath('src/main/engine/orchestrator.ts', '@shared/types', allFiles)
+  assert.equal(sharedResolved, 'src/shared/types.ts')
+})
+
+test('analyzeImpact finds direct and transitive dependencies', () => {
+  const graph = {
+    imports: {
+      'src/main/index.ts': ['src/main/engine/bus.ts'],
+      'src/main/engine/orchestrator.ts': ['src/main/engine/bus.ts'],
+      'src/main/engine/bus.ts': []
+    },
+    importedBy: {
+      'src/main/engine/bus.ts': ['src/main/index.ts', 'src/main/engine/orchestrator.ts'],
+      'src/main/index.ts': [],
+      'src/main/engine/orchestrator.ts': []
+    }
+  }
+
+  const impact = analyzeImpact(['src/main/engine/bus.ts'], graph)
+  assert.deepEqual(impact.changedFiles, ['src/main/engine/bus.ts'])
+  assert.equal(impact.directlyAffected.length, 2)
+  assert.ok(impact.directlyAffected.includes('src/main/index.ts'))
+  assert.ok(impact.directlyAffected.includes('src/main/engine/orchestrator.ts'))
+  assert.equal(impact.totalAffectedCount, 3)
+})
+
+test('classifyCommandRisk identifies safe, write, network and destructive commands', () => {
+  assert.equal(classifyCommandRisk('npm test'), 'SAFE_READ_ONLY')
+  assert.equal(classifyCommandRisk('tsc --noEmit'), 'SAFE_READ_ONLY')
+  assert.equal(classifyCommandRisk('git status'), 'SAFE_READ_ONLY')
+
+  assert.equal(classifyCommandRisk('npm run build'), 'WORKSPACE_WRITE')
+  assert.equal(classifyCommandRisk('mkdir src/test'), 'WORKSPACE_WRITE')
+
+  assert.equal(classifyCommandRisk('curl https://example.com'), 'NETWORK_ACCESS')
+  assert.equal(classifyCommandRisk('git push origin main'), 'NETWORK_ACCESS')
+  assert.equal(classifyCommandRisk('npm publish'), 'NETWORK_ACCESS')
+
+  assert.equal(classifyCommandRisk('rm -rf node_modules'), 'HIGH_RISK_DESTRUCTIVE')
+  assert.equal(classifyCommandRisk('del /s /q test.txt'), 'HIGH_RISK_DESTRUCTIVE')
+  assert.equal(classifyCommandRisk('sudo rm file'), 'HIGH_RISK_DESTRUCTIVE')
+})
+
+
+// ------------------------------------ phase 2: autonomous editing & checkpoints ----
+
+test('AuditLog records entries, filters by action/task and formats to JSONL', () => {
+  const log = new AuditLog('run-123')
+  audit.runStarted(log, 'run-123', 'Implement Phase 2')
+  audit.taskCreated(log, 'run-123', 'task-1', 'Add Checkpoints', 'implementer')
+  audit.fileWrite(log, 'run-123', 'task-1', 'src/checkpoints.ts', 120, true)
+
+  const all = log.getAll()
+  assert.equal(all.length, 3)
+
+  const taskEntries = log.getByTask('task-1')
+  assert.equal(taskEntries.length, 2)
+
+  const writeEntries = log.getByAction('FILE_WRITE')
+  assert.equal(writeEntries.length, 1)
+  assert.equal(writeEntries[0].metadata.file, 'src/checkpoints.ts')
+
+  const jsonl = log.toJSONL()
+  assert.ok(jsonl.includes('"action":"RUN_STARTED"'))
+  assert.ok(jsonl.includes('"action":"FILE_WRITE"'))
+})
+
+test('CheckpointManager creates snapshots and rolls back file changes', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-chk-test-'))
+  try {
+    const sandbox = new Sandbox(tmpDir)
+    const fileRel = 'src/test.txt'
+    await sandbox.writeFile(fileRel, 'version 1')
+
+    const chkManager = new CheckpointManager(sandbox)
+    const chk = await chkManager.createCheckpoint('run-1', 'task-1', 'Before v2 update', [fileRel])
+
+    assert.equal(chk.snapshots.length, 1)
+    assert.equal(chk.snapshots[0].content, 'version 1')
+    assert.equal(chk.snapshots[0].existed, true)
+
+    // Modify file
+    await sandbox.writeFile(fileRel, 'version 2 modified')
+    assert.equal(await sandbox.readFile(fileRel), 'version 2 modified')
+
+    // Rollback
+    const restored = await chkManager.rollback(chk.id)
+    assert.deepEqual(restored, [fileRel])
+    assert.equal(await sandbox.readFile(fileRel), 'version 1')
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  }
+})
+
+test('PatchPreviewManager generates atomic change groups and summaries', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-patch-test-'))
+  try {
+    const sandbox = new Sandbox(tmpDir)
+    await sandbox.writeFile('existing.ts', 'line 1\nline 2')
+
+    const previewManager = new PatchPreviewManager(sandbox)
+    const group = await previewManager.createPreviewGroup('run-1', 'task-1', 'Multi-file patch', [
+      { path: 'existing.ts', content: 'line 1\nline 2\nline 3' },
+      { path: 'newfile.ts', content: 'hello world' }
+    ])
+
+    assert.equal(group.files.length, 2)
+    assert.equal(group.totalAdded, 3)
+    assert.ok(group.totalRemoved >= 0)
+
+    const summary = previewManager.formatGroupSummary(group)
+    assert.ok(summary.includes('Atomic Patch Preview (2 files'))
+    assert.ok(summary.includes('existing.ts'))
+    assert.ok(summary.includes('newfile.ts'))
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  }
+})
+
+test('ApprovalGate respects risk levels and security policy', async () => {
+  const gate = new ApprovalGate(bus)
+
+  // Safe read-only commands should resolve automatically without needing explicit approval response
+  const readDecision = await gate.request(
+    'command',
+    'Run npm test',
+    { command: 'npm test', workspaceRoot: '/tmp' },
+    'run-1'
+  )
+  assert.equal(readDecision.allowed, true)
+
+  // Configure security policy
+  gate.setPolicy({ alwaysRequireDestructiveApproval: true })
+  gate.allowAlways('command')
+
+  // Destructive command should NOT be auto-approved even when allowAlways('command') is enabled
+  const pendingPromise = gate.request(
+    'command',
+    'Delete node_modules',
+    { command: 'rm -rf node_modules', workspaceRoot: '/tmp' },
+    'run-1'
+  )
+  assert.equal(gate.pendingCount, 1)
+
+  // Clean up pending gate
+  gate.respond(Array.from((gate as unknown as { pending: Map<string, unknown> }).pending.keys())[0], false, false)
+  await pendingPromise
+})
+

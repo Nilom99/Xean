@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Bus } from './bus'
+import { classifyCommandRisk, type CommandRiskLevel } from './commands'
 
 export type ApprovalKind = 'write' | 'command'
 
@@ -9,6 +10,8 @@ export interface ApprovalPayload {
   /** Command that will run (for kind = 'command'). */
   command?: string
   cwd?: string
+  /** Risk classification for commands. */
+  risk?: CommandRiskLevel
   /** Sandbox boundary shown in the dialog. */
   workspaceRoot: string
 }
@@ -17,28 +20,58 @@ export interface ApprovalDecision {
   allowed: boolean
   /** "Allow always" sets this flag for subsequent requests of the same kind. */
   always: boolean
+  /** Escalation rationale if blocked or escalated. */
+  reason?: string
 }
 
 interface PendingApproval {
   resolve: (decision: ApprovalDecision) => void
   /** The kind of this request, remembered so "Allow always" can register it. */
   kind: ApprovalKind
+  risk?: CommandRiskLevel
+}
+
+export interface SecurityPolicy {
+  /** Max command risk level that can be auto-approved. Defaults to WORKSPACE_WRITE. */
+  maxAutoApproveRisk: CommandRiskLevel
+  /** Require explicit confirmation for HIGH_RISK_DESTRUCTIVE actions regardless of "always" setting. */
+  alwaysRequireDestructiveApproval: boolean
+}
+
+const DEFAULT_POLICY: SecurityPolicy = {
+  maxAutoApproveRisk: 'WORKSPACE_WRITE',
+  alwaysRequireDestructiveApproval: true
 }
 
 /**
- * Human-in-the-loop gate.
+ * Human-in-the-loop gate with risk-aware escalation policies.
  *
  * The engine suspends on a promise while the UI shows the approval dialog.
  * Approvals are granted per request, or "always" per kind for the session.
  */
 export class ApprovalGate {
+  private readonly bus: Bus
   private pending = new Map<string, PendingApproval>()
   private alwaysAllowed = new Set<ApprovalKind>()
+  private policy: SecurityPolicy = { ...DEFAULT_POLICY }
 
-  constructor(private readonly bus: Bus) {}
+  constructor(bus: Bus) {
+    this.bus = bus
+  }
+
+  setPolicy(policy: Partial<SecurityPolicy>): void {
+    this.policy = { ...this.policy, ...policy }
+  }
+
+  getPolicy(): SecurityPolicy {
+    return { ...this.policy }
+  }
 
   /** True when this kind no longer needs a user decision. */
-  isAutoApproved(kind: ApprovalKind): boolean {
+  isAutoApproved(kind: ApprovalKind, risk?: CommandRiskLevel): boolean {
+    if (risk === 'HIGH_RISK_DESTRUCTIVE' && this.policy.alwaysRequireDestructiveApproval) {
+      return false
+    }
     return this.alwaysAllowed.has(kind)
   }
 
@@ -59,13 +92,21 @@ export class ApprovalGate {
     payload: ApprovalPayload,
     runId: string
   ): Promise<ApprovalDecision> {
-    if (this.alwaysAllowed.has(kind)) {
+    const risk = payload.command ? (payload.risk ?? classifyCommandRisk(payload.command)) : undefined
+
+    // Safe read-only commands bypass approval gate completely
+    if (kind === 'command' && risk === 'SAFE_READ_ONLY') {
+      return Promise.resolve({ allowed: true, always: false })
+    }
+
+    // Check auto-approve condition
+    if (this.isAutoApproved(kind, risk)) {
       return Promise.resolve({ allowed: true, always: false })
     }
 
     const id = randomUUID()
     return new Promise<ApprovalDecision>((resolve) => {
-      this.pending.set(id, { resolve, kind })
+      this.pending.set(id, { resolve, kind, risk })
       this.bus.emitEvent({
         type: 'APPROVAL_REQUIRED',
         ts: Date.now(),
@@ -73,7 +114,10 @@ export class ApprovalGate {
         id,
         kind,
         detail,
-        payload
+        payload: {
+          ...payload,
+          risk
+        }
       })
     })
   }
@@ -84,12 +128,18 @@ export class ApprovalGate {
    * The kind defaults to the one recorded when the request was made, so the
    * renderer does not have to repeat it.
    */
-  respond(id: string, allowed: boolean, always: boolean, kind?: ApprovalKind): void {
+  respond(id: string, allowed: boolean, always: boolean, kind?: ApprovalKind, reason?: string): void {
     const entry = this.pending.get(id)
     if (!entry) return
     this.pending.delete(id)
-    if (always && allowed) this.alwaysAllowed.add(kind ?? entry.kind)
-    entry.resolve({ allowed, always })
+    const targetKind = kind ?? entry.kind
+    if (always && allowed) {
+      // Don't auto-allow high risk if policy forbids
+      if (!(entry.risk === 'HIGH_RISK_DESTRUCTIVE' && this.policy.alwaysRequireDestructiveApproval)) {
+        this.alwaysAllowed.add(targetKind)
+      }
+    }
+    entry.resolve({ allowed, always, reason })
   }
 
   /** Number of approvals currently waiting. */

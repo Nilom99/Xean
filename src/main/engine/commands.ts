@@ -76,3 +76,58 @@ export function filterPlatformCompatible(
   }
   return { compatible, skipped }
 }
+
+export type CommandRiskLevel =
+  | 'SAFE_READ_ONLY'
+  | 'WORKSPACE_WRITE'
+  | 'NETWORK_ACCESS'
+  | 'HIGH_RISK_DESTRUCTIVE'
+
+const HIGH_RISK_PATTERNS = [
+  /rm\s+-rf?/i,
+  /del\s+\/[sfq]/i,
+  /format\s+[c-z]:/i,
+  /drop\s+database/i,
+  /sudo\s+/i,
+  /chmod\s+777/i,
+  />\s*\/dev\/null/i
+]
+
+const NETWORK_PATTERNS = [
+  /\bcurl\b/i,
+  /\bwget\b/i,
+  /\bgit\s+(push|fetch|pull)\b/i,
+  /\bnpm\s+publish\b/i,
+  /\bpnpm\s+publish\b/i
+]
+
+const READ_ONLY_PATTERNS = [
+  /^(npm|pnpm|yarn)\s+test/i,
+  /^(npm|pnpm|yarn)\s+run\s+typecheck/i,
+  /^tsc\b/i,
+  /^git\s+(status|diff|log|branch)/i,
+  /^node\s+--test/i,
+  /^(dir|ls|cat|echo|pwd)\b/i
+]
+
+/**
+ * Classify terminal command by safety / impact risk level.
+ */
+export function classifyCommandRisk(command: string): CommandRiskLevel {
+  const trimmed = command.trim()
+
+  for (const pattern of HIGH_RISK_PATTERNS) {
+    if (pattern.test(trimmed)) return 'HIGH_RISK_DESTRUCTIVE'
+  }
+
+  for (const pattern of NETWORK_PATTERNS) {
+    if (pattern.test(trimmed)) return 'NETWORK_ACCESS'
+  }
+
+  for (const pattern of READ_ONLY_PATTERNS) {
+    if (pattern.test(trimmed)) return 'SAFE_READ_ONLY'
+  }
+
+  return 'WORKSPACE_WRITE'
+}
+
