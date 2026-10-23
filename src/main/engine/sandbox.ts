@@ -1,16 +1,17 @@
 import { execa } from 'execa'
 import { loadIgnoreRules, filterIgnored } from './codexignore'
+import { isSecretFile } from './workspaceContext'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
 export class SandboxError extends Error {
-  constructor(
-    message: string,
-    readonly kind: 'path' | 'command' | 'timeout'
-  ) {
+  readonly kind: 'path' | 'command' | 'timeout'
+
+  constructor(message: string, kind: 'path' | 'command' | 'timeout') {
     super(message)
     this.name = 'SandboxError'
+    this.kind = kind
   }
 }
 
@@ -39,7 +40,11 @@ export function truncateOutput(text: string, limit = MAX_OUTPUT_CHARS): string {
  * against the workspace root, so symlink escapes are rejected too.
  */
 export class Sandbox {
-  constructor(private root: string) {}
+  private root: string
+
+  constructor(root: string) {
+    this.root = root
+  }
 
   get rootPath(): string {
     return this.root
@@ -118,6 +123,11 @@ export class Sandbox {
 
   async readFile(target: string): Promise<string> {
     const safe = await this.resolveInside(target)
+    // Reject secret files at the filesystem boundary too, so the workspace
+    // tree and the model-context builder share the same policy.
+    if (isSecretFile(target)) {
+      throw new SandboxError(`Refusing to read a protected secret file: ${target}`, 'path')
+    }
     return fs.readFile(safe, 'utf8')
   }
 

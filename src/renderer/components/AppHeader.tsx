@@ -2,7 +2,6 @@ import { Command, FolderOpen, Play, Square, Settings2 } from 'lucide-react'
 import type { SettingsState } from '@shared/types'
 import { Badge } from './ui/Badge'
 import { Button } from './ui/Button'
-import { Spinner } from './ui/Spinner'
 import { formatTokens } from '../lib/format'
 
 export interface AppHeaderProps {
@@ -10,7 +9,7 @@ export interface AppHeaderProps {
   running: boolean
   goal: string
   usage: { promptTokens: number; completionTokens: number; requests: number }
-  onStart: () => void
+  onStart: (goal: string) => void
   onStop: () => void
   onOpenSettings: () => void
   onOpenPalette: () => void
@@ -86,8 +85,14 @@ export function AppHeader({
             Stop
           </Button>
         ) : (
-          <Button variant="primary" size="sm" onClick={onStart} disabled={!hasKey}>
-            {running ? <Spinner size={12} /> : <Play size={12} />}
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => onStart(goal)}
+            disabled={!hasKey || !goal.trim()}
+            title={!hasKey ? 'Set an API key first' : !goal.trim() ? 'Describe a goal to start' : 'Start the run'}
+          >
+            <Play size={12} />
             Run
           </Button>
         )}

@@ -27,8 +27,6 @@ const TEXT_EXTENSIONS = new Set([
   '.toml',
   '.ini',
   '.cfg',
-  '.env',
-  '.example',
   '.html',
   '.css',
   '.scss',
@@ -42,6 +40,58 @@ const TEXT_EXTENSIONS = new Set([
   '.sql',
   '.graphql'
 ])
+
+/**
+ * File patterns that must never enter model context.
+ *
+ * These cover .env files, private keys, certificates, credentials, and common
+ * cloud/SSH secret locations. The check is applied on top of .gitignore /
+ * .codexignore so a sensitive file cannot be hidden in one view but exposed
+ * by another.
+ */
+const SECRET_FILE_PATTERNS: RegExp[] = [
+  // Environment files
+  /^\.env(\..*)?$/i,
+  // Private keys and certificates
+  /\.pem$/i,
+  /\.key$/i,
+  /\.p12$/i,
+  /\.pfx$/i,
+  /\.crt$/i,
+  /\.cer$/i,
+  /\.der$/i,
+  // Credentials and secrets
+  /credentials/i,
+  /secrets/i,
+  /\.netrc$/i,
+  /\.aws\/credentials$/i,
+  // SSH keys and config (with or without .ssh prefix)
+  /(^|\/)\.ssh\/id_(rsa|ed25519|ec|dsa)$/i,
+  /(^|\/)\.ssh\/config$/i,
+  // Bare SSH private key names
+  /^id_(rsa|ed25519|ec|dsa)$/i,
+  // Cloud provider configs with credentials
+  /\/\.gcloud\/credentials\.json$/i,
+  /\/\.azure\/accessTokens\.json$/i,
+  // Database connection strings
+  /database_url/i,
+  /connection_string/i,
+  // Package managers with credentials
+  /\.npmrc$/i,
+  /\.pypirc$/i,
+  // IDE/workspace files that may contain secrets
+  /\.vscode\/settings\.json$/i,
+  /\.idea\/.*\.xml$/i
+]
+
+/** True when a file is a known secret or credential file. */
+export function isSecretFile(file: string): boolean {
+  const lower = file.toLowerCase()
+  for (const pattern of SECRET_FILE_PATTERNS) {
+    if (pattern.test(lower)) return true
+  }
+  return false
+}
 
 /** Words that carry no signal when ranking files against a task. */
 const STOP_WORDS = new Set([
@@ -138,6 +188,7 @@ export function rankFiles(
 
 /** True when a file looks like text we can safely paste into a prompt. */
 export function isTextFile(file: string): boolean {
+  if (isSecretFile(file)) return false
   const lower = file.toLowerCase()
   if (lower.endsWith('package-lock.json') || lower.endsWith('yarn.lock')) return false
   const dot = lower.lastIndexOf('.')

@@ -156,7 +156,7 @@ export default function App() {
         running={running}
         goal={state.goal}
         usage={state.usage}
-        onStart={() => setTab('transcript')}
+        onStart={(goal: string) => void startRun(goal)}
         onStop={() => void stopRun()}
         onOpenSettings={() => setSettingsOpen((v) => !v)}
         onOpenPalette={() => setPaletteOpen(true)}

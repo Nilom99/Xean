@@ -10,7 +10,11 @@ export type KeySource = 'keychain' | 'env' | 'none'
  * Primary storage is the OS keychain via Electron `safeStorage`; the
  * encrypted blob is written to the per-user app data directory. When
  * `safeStorage` is unavailable (headless Linux without a keyring) we fall
- * back to a plain `.env` file inside the app directory.
+ * back to a plain `.env` file inside the user data directory.
+ *
+ * The fallback is not encrypted — it is a last-resort for environments
+ * without a keyring. On desktop platforms with safeStorage available the
+ * key is never written to disk in plaintext.
  *
  * The raw key never leaves this module except through `getApiKey()`.
  */
@@ -23,9 +27,9 @@ function keychainDir(): string {
   return app.getPath('userData')
 }
 
-/** Directory holding the `.env` fallback. */
+/** Directory holding the `.env` fallback — user data, not the installed app. */
 function envDir(): string {
-  return app.getAppPath()
+  return app.getPath('userData')
 }
 
 async function readEnvFile(dir: string): Promise<string> {
@@ -78,6 +82,12 @@ async function writeEnvFallback(value: string): Promise<void> {
   )
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(file, next, 'utf8')
+  // Restrict file permissions where supported (owner read/write only).
+  try {
+    await fs.chmod(file, 0o600)
+  } catch {
+    // chmod may fail on some filesystems; that is not fatal.
+  }
 }
 
 /** Load the key from disk into memory (keychain first, then `.env`). */
@@ -115,9 +125,10 @@ export function hasApiKey(): boolean {
 }
 
 /**
- * Persist a key. Uses the OS keychain when encryption is available and
- * always mirrors it into `.env` so the app still works on systems without
- * a keyring.
+ * Persist a key. Uses the OS keychain when encryption is available. When
+ * safeStorage is unavailable, falls back to a plaintext `.env` file in the
+ * user data directory. The fallback is not mirrored from the keychain — it
+ * is the only storage on headless Linux without a keyring.
  */
 export async function saveApiKey(value: string): Promise<KeySource> {
   const trimmed = value.trim()
