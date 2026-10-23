@@ -10,6 +10,9 @@ import type { Sandbox } from './sandbox'
 import type { ApprovalGate } from './approvals'
 import type { DecisionGate } from './decision'
 import type { Store } from './store'
+import type { CheckpointManager } from './checkpoints'
+import type { AuditLog } from './audit'
+import { createAuditLog, audit } from './audit'
 import { Agent } from './agents'
 import { parsePlan, parseCommands } from './protocol'
 import { mergeCommands, filterPlatformCompatible } from './commands'
@@ -28,6 +31,8 @@ export interface OrchestratorDeps {
   approvals: ApprovalGate
   decisions: DecisionGate
   store: Store
+  checkpoints?: CheckpointManager
+  auditLog?: AuditLog
   getConfig: () => AppConfig
   getAssignments: () => Record<Role, RoleAssignment>
 }
@@ -90,10 +95,14 @@ export class Orchestrator {
     const startedAt = Date.now()
     const notes: string[] = []
 
+    // Create audit log for this run
+    const auditLog = createAuditLog(runId, this.deps.sandbox.rootPath)
+    audit.runStarted(auditLog, runId, goal)
+
     bus.emitEvent({ type: 'RUN_STARTED', ts: startedAt, runId, goal })
 
     // Fire and forget: the run reports its own progress through the bus.
-    void this.execute(runId, goal, startedAt, notes).catch((err: unknown) => {
+    void this.execute(runId, goal, startedAt, notes, auditLog).catch((err: unknown) => {
       const message = redactSecrets(err instanceof Error ? err.message : String(err))
       bus.emitEvent({ type: 'ERROR', ts: Date.now(), runId, scope: 'orchestrator', message })
     })
@@ -106,7 +115,8 @@ export class Orchestrator {
     runId: string,
     goal: string,
     startedAt: number,
-    notes: string[]
+    notes: string[],
+    auditLog: AuditLog
   ): Promise<void> {
     let status: 'done' | 'aborted' | 'failed' = 'done'
     try {
@@ -127,7 +137,7 @@ export class Orchestrator {
         const states = this.createTasks(runId, planned)
 
         // ---- 3. Execute in parallel batches --------------------------------
-        await this.executeTasks(runId, states, notes)
+        await this.executeTasks(runId, states, notes, auditLog)
 
         // ---- 4. Verify with the Runner ------------------------------------
         await this.runVerification(runId, states, notes)
@@ -143,7 +153,7 @@ export class Orchestrator {
       bus.emitEvent({ type: 'ERROR', ts: Date.now(), runId, scope: 'orchestrator', message })
       notes.push(message)
     } finally {
-      await this.finish(runId, goal, startedAt, status, notes)
+      await this.finish(runId, goal, startedAt, status, notes, auditLog)
       this.running = false
       this.currentRunId = null
     }
@@ -247,11 +257,13 @@ export class Orchestrator {
   private async executeTasks(
     runId: string,
     states: TaskState[],
-    notes: string[]
+    notes: string[],
+    auditLog: AuditLog
   ): Promise<void> {
     const config = this.deps.getConfig()
     const maxParallel = Math.max(1, config.maxParallelTasks)
-    const cycle = new TaskCycle(this.deps, runId, () => this.aborted)
+    const deps = { ...this.deps, auditLog }
+    const cycle = new TaskCycle(deps, runId, () => this.aborted)
     const pending = [...states]
     let guard = 0
 
@@ -491,11 +503,14 @@ export class Orchestrator {
     goal: string,
     startedAt: number,
     status: 'done' | 'aborted' | 'failed',
-    notes: string[]
+    notes: string[],
+    auditLog: AuditLog
   ): Promise<void> {
     const endedAt = Date.now()
     const tasks = this.deps.board.list(runId)
     const assignments = this.deps.getAssignments()
+
+    audit.runFinished(auditLog, runId, status, `Run ${status}`)
 
     const models: Record<string, string> = {}
     for (const role of ROLES) {
