@@ -166,3 +166,38 @@ export interface RunSummary {
   tasks: number
   reportPath?: string
 }
+
+export interface CheckpointInfo {
+  id: string
+  runId: string
+  taskId: string
+  ts: number
+  description: string
+  fileCount: number
+}
+
+export interface ProposedFileChange {
+  path: string
+  content: string
+}
+
+export interface FileDiffPreview {
+  path: string
+  existed: boolean
+  oldContent: string | null
+  newContent: string
+  unifiedDiff: string
+  linesAdded: number
+  linesRemoved: number
+}
+
+export interface AtomicChangeGroup {
+  id: string
+  runId: string
+  taskId: string
+  description: string
+  files: FileDiffPreview[]
+  totalAdded: number
+  totalRemoved: number
+  createdAt: number
+}

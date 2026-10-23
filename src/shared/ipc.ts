@@ -5,7 +5,10 @@ import type {
   ModelResolution,
   Role,
   RunSummary,
-  SettingsState
+  SettingsState,
+  CheckpointInfo,
+  ProposedFileChange,
+  AtomicChangeGroup
 } from './types'
 
 /** Channels invoked from the renderer via contextBridge (request/response). */
@@ -28,6 +31,10 @@ export const IPC = {
   runStart: 'run:start',
   runStop: 'run:stop',
   runList: 'run:list',
+  checkpointList: 'checkpoints:list',
+  checkpointRollback: 'checkpoints:rollback',
+  checkpointRollbackFile: 'checkpoints:rollback-file',
+  previewGroup: 'preview:group',
   approvalRespond: 'approval:respond',
   decisionRespond: 'decision:respond',
   exportReport: 'run:export-report',
@@ -65,6 +72,10 @@ export interface IpcApi {
   startRun(goal: string): Promise<{ ok: boolean; runId?: string; error?: string }>
   stopRun(): Promise<{ ok: boolean }>
   listRuns(): Promise<RunSummary[]>
+  listCheckpoints(runId: string): Promise<CheckpointInfo[]>
+  rollbackCheckpoint(checkpointId: string): Promise<{ ok: boolean; restored?: string[]; error?: string }>
+  rollbackCheckpointFile(checkpointId: string, relativePath: string): Promise<{ ok: boolean; restored?: boolean; error?: string }>
+  previewGroup(runId: string, taskId: string, description: string, files: ProposedFileChange[]): Promise<{ ok: boolean; group?: AtomicChangeGroup; error?: string }>
   respondApproval(id: string, allowed: boolean, always: boolean): Promise<void>
   respondDecision(id: string, choice: string): Promise<void>
   exportReport(runId?: string): Promise<{ ok: boolean; path?: string }>

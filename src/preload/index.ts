@@ -6,7 +6,7 @@ import {
   type IpcApi,
   type MenuAction
 } from '@shared/ipc'
-import type { AppConfig, EngineEvent, Role } from '@shared/types'
+import type { AppConfig, EngineEvent, Role, ProposedFileChange } from '@shared/types'
 
 /**
  * The renderer-facing bridge.
@@ -38,6 +38,10 @@ const api: IpcApi = {
   startRun: (goal: string) => ipcRenderer.invoke(IPC.runStart, goal),
   stopRun: () => ipcRenderer.invoke(IPC.runStop),
   listRuns: () => ipcRenderer.invoke(IPC.runList),
+  listCheckpoints: (runId: string) => ipcRenderer.invoke(IPC.checkpointList, runId),
+  rollbackCheckpoint: (checkpointId: string) => ipcRenderer.invoke(IPC.checkpointRollback, checkpointId),
+  rollbackCheckpointFile: (checkpointId: string, relativePath: string) => ipcRenderer.invoke(IPC.checkpointRollbackFile, checkpointId, relativePath),
+  previewGroup: (runId: string, taskId: string, description: string, files: ProposedFileChange[]) => ipcRenderer.invoke(IPC.previewGroup, runId, taskId, description, files),
 
   // ---- approvals & decisions --------------------------------------------
   respondApproval: (id: string, allowed: boolean, always: boolean) =>

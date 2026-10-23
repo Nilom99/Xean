@@ -2,7 +2,7 @@ import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { IPC, IPC_EVENT, type WorkspaceNode } from '../shared/ipc'
-import type { AppConfig, Role } from '../shared/types'
+import type { AppConfig, Role, ProposedFileChange } from '../shared/types'
 import { runtime } from './runtime'
 import { catalog } from './openrouter/catalog'
 import { saveApiKey, clearApiKey } from './secrets'
@@ -15,6 +15,7 @@ import { DecisionGate } from './engine/decision'
 import { Orchestrator } from './engine/orchestrator'
 import { createStore } from './engine/store'
 import { CheckpointManager } from './engine/checkpoints'
+import { PatchPreviewManager } from './engine/patchPreview'
 import {
   ProviderManager,
   buildDefaultProviderConfigs
@@ -86,6 +87,7 @@ export function registerIpc(): void {
   const approvals = new ApprovalGate(bus)
   const decisions = new DecisionGate(bus)
   const checkpoints = new CheckpointManager(sandbox)
+  const patchPreview = new PatchPreviewManager(sandbox)
 
   // Build provider configs from runtime config
   const config = runtime.getConfig()
@@ -271,6 +273,47 @@ export function registerIpc(): void {
       const absolute = await sandbox.resolveInside(target)
       await shell.openPath(absolute)
       return { ok: true }
+    } catch (err) {
+      return { ok: false, error: safeMessage(err) }
+    }
+  })
+
+  // ---- checkpoints ------------------------------------------------------
+  handle(IPC.checkpointList, async (runId: string) => {
+    const cps = checkpoints.listForRun(runId)
+    return cps.map((c) => ({
+      id: c.id,
+      runId: c.runId,
+      taskId: c.taskId,
+      ts: c.ts,
+      description: c.description,
+      fileCount: c.snapshots.length
+    }))
+  })
+
+  handle(IPC.checkpointRollback, async (checkpointId: string) => {
+    try {
+      const restored = await checkpoints.rollback(checkpointId)
+      return { ok: true, restored }
+    } catch (err) {
+      return { ok: false, error: safeMessage(err) }
+    }
+  })
+
+  handle(IPC.checkpointRollbackFile, async (checkpointId: string, relativePath: string) => {
+    try {
+      const restored = await checkpoints.rollbackFile(checkpointId, relativePath)
+      return { ok: true, restored }
+    } catch (err) {
+      return { ok: false, error: safeMessage(err) }
+    }
+  })
+
+  // ---- preview ----------------------------------------------------------
+  handle(IPC.previewGroup, async (runId: string, taskId: string, description: string, files: ProposedFileChange[]) => {
+    try {
+      const group = await patchPreview.createPreviewGroup(runId, taskId, description, files)
+      return { ok: true, group }
     } catch (err) {
       return { ok: false, error: safeMessage(err) }
     }
