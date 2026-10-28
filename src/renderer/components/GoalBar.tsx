@@ -34,6 +34,7 @@ export function GoalBar({ running, disabled, onStart, onStop }: GoalBarProps) {
           value={goal}
           disabled={running}
           placeholder="Describe what you want to build…"
+          aria-label="Goal prompt"
           onChange={(e) => setGoal(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {

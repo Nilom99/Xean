@@ -75,7 +75,7 @@ export function SettingsPanel({
   const config = settings?.config
 
   return (
-    <aside className="flex h-full w-[380px] shrink-0 flex-col border-l border-border bg-surface">
+    <aside aria-label="Settings" className="flex h-full w-[380px] shrink-0 flex-col border-l border-border bg-surface">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <span className="text-[13px] font-semibold text-ink">Settings</span>
         <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close settings">
@@ -132,7 +132,11 @@ export function SettingsPanel({
             </div>
           ) : (
             <div className="space-y-2">
+              <label htmlFor="input-api-key" className="sr-only">
+                OpenRouter API key
+              </label>
               <Input
+                id="input-api-key"
                 type="password"
                 value={apiKey}
                 placeholder="sk-or-v1-…"
@@ -193,10 +197,13 @@ export function SettingsPanel({
             {ROLES.map((role) => {
               const resolution = resolutions.find((r) => r.role === role)
               const selected = config?.roles[role]?.model ?? ''
+              const selectId = `role-model-select-${role}`
               return (
                 <div key={role} className="rounded-md border border-border bg-surface-2 p-2">
                   <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="text-[12px] font-medium text-ink">{ROLE_LABELS[role]}</span>
+                    <label htmlFor={selectId} className="text-[12px] font-medium text-ink cursor-pointer">
+                      {ROLE_LABELS[role]}
+                    </label>
                     {resolution ? (
                       <Badge
                         tone={
@@ -214,6 +221,7 @@ export function SettingsPanel({
                   </div>
 
                   <Select
+                    id={selectId}
                     value={selected}
                     onChange={(e) =>
                       void onSetRoleModel(role, e.target.value).catch((err: unknown) =>
@@ -247,8 +255,11 @@ export function SettingsPanel({
           <section>
             <h3 className="mb-1.5 text-xs font-semibold text-ink-muted">Run behaviour</h3>
 
-            <label className="mb-1 block text-[11px] text-ink-faint">Iterations per task</label>
+            <label htmlFor="setting-iterations" className="mb-1 block text-[11px] text-ink-faint">
+              Iterations per task
+            </label>
             <Input
+              id="setting-iterations"
               type="number"
               min={1}
               max={10}
@@ -260,8 +271,11 @@ export function SettingsPanel({
               }
             />
 
-            <label className="mb-1 mt-2 block text-[11px] text-ink-faint">Max parallel tasks</label>
+            <label htmlFor="setting-parallel" className="mb-1 mt-2 block text-[11px] text-ink-faint">
+              Max parallel tasks
+            </label>
             <Input
+              id="setting-parallel"
               type="number"
               min={1}
               max={8}
@@ -273,8 +287,11 @@ export function SettingsPanel({
               }
             />
 
-            <label className="mb-1 mt-2 block text-[11px] text-ink-faint">Token budget</label>
+            <label htmlFor="setting-budget" className="mb-1 mt-2 block text-[11px] text-ink-faint">
+              Token budget
+            </label>
             <Input
+              id="setting-budget"
               type="number"
               min={1000}
               step={10000}
@@ -284,7 +301,7 @@ export function SettingsPanel({
               }
             />
 
-            <label className="mt-2 flex items-center gap-2 text-[12px] text-ink">
+            <label className="mt-2 flex items-center gap-2 text-[12px] text-ink cursor-pointer">
               <input
                 type="checkbox"
                 checked={config.autoApproveWrites}
@@ -294,8 +311,11 @@ export function SettingsPanel({
               Auto-approve file writes
             </label>
 
-            <label className="mb-1 mt-3 block text-[11px] text-ink-faint">Theme</label>
+            <label htmlFor="setting-theme" className="mb-1 mt-3 block text-[11px] text-ink-faint">
+              Theme
+            </label>
             <Select
+              id="setting-theme"
               value={config.theme}
               onChange={(e) => void onUpdateConfig({ theme: e.target.value as 'dark' | 'light' })}
             >

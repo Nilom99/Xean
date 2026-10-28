@@ -60,33 +60,41 @@ export function DiffViewer({ patches }: { patches: FilePatch[] }) {
     <div className="flex h-full min-h-0">
       {/* File list */}
       <div className="w-56 shrink-0 overflow-auto border-r border-border bg-surface">
-        {patches.map((patch) => (
-          <button
-            key={`${patch.path}-${patch.added}-${patch.removed}`}
-            onClick={() => setSelected(patch.path)}
-            className={
-              patch.path === active.path
-                ? 'block w-full border-l-2 border-accent bg-surface-2 px-2.5 py-1.5 text-left'
-                : 'block w-full border-l-2 border-transparent px-2.5 py-1.5 text-left hover:bg-surface-2'
-            }
-          >
-            <div className="truncate text-[12px] text-ink" title={patch.path}>
-              {patch.path}
-            </div>
-            <div className="flex gap-2 text-[10px]">
-              <span className="text-success">+{patch.added}</span>
-              <span className="text-danger">-{patch.removed}</span>
-            </div>
-          </button>
-        ))}
+        {patches.map((patch) => {
+          const isSelected = patch.path === active.path
+          return (
+            <button
+              key={`${patch.path}-${patch.added}-${patch.removed}`}
+              aria-selected={isSelected}
+              onClick={() => setSelected(patch.path)}
+              className={
+                isSelected
+                  ? 'block w-full border-l-2 border-accent bg-surface-2 px-2.5 py-1.5 text-left'
+                  : 'block w-full border-l-2 border-transparent px-2.5 py-1.5 text-left hover:bg-surface-2'
+              }
+            >
+              <div className="truncate text-[12px] text-ink" title={patch.path}>
+                {patch.path}
+              </div>
+              <div className="flex gap-2 text-[10px]">
+                <span className="text-success">+{patch.added}</span>
+                <span className="text-danger">-{patch.removed}</span>
+              </div>
+            </button>
+          )
+        })}
       </div>
 
       {/* Diff */}
       <div className="min-w-0 flex-1 overflow-auto bg-surface">
-        <div className="sticky top-0 border-b border-border bg-surface px-3 py-1.5">
-          <span className="font-mono text-[12px] text-ink">{active.path}</span>
-        </div>
-        <DiffRows diff={active.diff} />
+        {active ? (
+          <>
+            <div className="sticky top-0 border-b border-border bg-surface px-3 py-1.5">
+              <span className="font-mono text-[12px] text-ink">{active.path}</span>
+            </div>
+            <DiffRows diff={active.diff} />
+          </>
+        ) : null}
       </div>
     </div>
   )

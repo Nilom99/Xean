@@ -78,7 +78,12 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]">
       <div className="absolute inset-0 bg-black/55" onClick={onClose} aria-hidden />
 
-      <div className="relative w-full max-w-lg overflow-hidden rounded-xl border border-border bg-surface shadow-2xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        className="relative w-full max-w-lg overflow-hidden rounded-xl border border-border bg-surface shadow-2xl"
+      >
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <Search size={14} className="shrink-0 text-ink-faint" />
           <input
@@ -89,6 +94,12 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
               setActive(0)
             }}
             placeholder="Type a command…"
+            aria-label="Search commands"
+            aria-autocomplete="list"
+            aria-controls="command-palette-list"
+            aria-activedescendant={
+              filtered[active] ? `command-option-${filtered[active].id}` : undefined
+            }
             className="w-full bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-faint"
           />
           <button
@@ -100,13 +111,16 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
           </button>
         </div>
 
-        <div className="max-h-72 overflow-auto p-1.5">
+        <div id="command-palette-list" role="listbox" aria-label="Commands" className="max-h-72 overflow-auto p-1.5">
           {filtered.length === 0 ? (
             <div className="px-2 py-6 text-center text-[13px] text-ink-faint">No matching command</div>
           ) : (
             filtered.map((command, index) => (
               <button
                 key={command.id}
+                id={`command-option-${command.id}`}
+                role="option"
+                aria-selected={index === active}
                 onMouseEnter={() => setActive(index)}
                 onClick={() => {
                   command.run()

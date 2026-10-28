@@ -40,6 +40,8 @@ export function Dialog({
 
   if (!open) return null
 
+  const titleId = 'dialog-title-id'
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
       <div
@@ -52,6 +54,7 @@ export function Dialog({
       <div
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
         className={cn(
           'relative flex max-h-full w-full max-w-xl flex-col overflow-hidden',
           'rounded-xl border border-border bg-surface shadow-2xl'
@@ -59,7 +62,9 @@ export function Dialog({
       >
         <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-ink">{title}</div>
+            <div id={titleId} className="text-sm font-semibold text-ink">
+              {title}
+            </div>
             {subtitle ? <div className="mt-0.5 text-xs text-ink-muted">{subtitle}</div> : null}
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={locked} aria-label="Close">
