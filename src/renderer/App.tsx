@@ -115,6 +115,21 @@ export default function App() {
 
   const totals = useMemo(() => patchTotals(state.tasks), [state.tasks])
 
+  const toggleTheme = useCallback(async (): Promise<void> => {
+    const currentTheme = settings?.config.theme ?? 'dark'
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark'
+    await updateConfig({ theme: newTheme })
+  }, [settings?.config.theme, updateConfig])
+
+  const refreshCatalog = useCallback(async (): Promise<void> => {
+    try {
+      await api().refreshCatalog()
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }, [reload])
+
   const commands = useMemo<Command[]>(
     () => [
       {
@@ -126,12 +141,14 @@ export default function App() {
       {
         id: 'workspace',
         label: 'Open workspace folder…',
+        hint: 'Ctrl+Shift+O',
         icon: CommandIcons.folder,
         run: () => void pickWorkspace()
       },
       {
         id: 'report',
         label: 'Export the run report',
+        hint: 'Ctrl+E',
         run: () => void exportReport()
       },
       {
@@ -139,12 +156,23 @@ export default function App() {
         label: 'Open settings',
         run: () => setSettingsOpen(true)
       },
+      {
+        id: 'toggle-theme',
+        label: `Switch theme (Current: ${settings?.config.theme ?? 'dark'})`,
+        run: () => void toggleTheme()
+      },
+      {
+        id: 'refresh-catalog',
+        label: 'Refresh free-model catalog',
+        run: () => void refreshCatalog()
+      },
+      { id: 'transcript', label: 'Show the transcript', run: () => setTab('transcript') },
       { id: 'tasks', label: 'Show the task board', run: () => setTab('tasks') },
       { id: 'changes', label: 'Show the changes', run: () => setTab('changes') },
       { id: 'workspace-files', label: 'Show the workspace files', run: () => setTab('workspace') },
       { id: 'runs', label: 'Show previous runs', run: () => setTab('runs') }
     ],
-    [stopRun, pickWorkspace, exportReport]
+    [stopRun, pickWorkspace, exportReport, toggleTheme, refreshCatalog, settings?.config.theme]
   )
 
   const running = state.status === 'running'
@@ -205,15 +233,46 @@ export default function App() {
           />
 
           <div className="min-h-0 flex-1">
-            {tab === 'transcript' ? (
+            <div
+              id="tabpanel-transcript"
+              role="tabpanel"
+              aria-labelledby="tab-transcript"
+              className={tab === 'transcript' ? 'h-full' : 'hidden'}
+            >
               <Transcript messages={state.messages} streams={state.streams} />
-            ) : null}
-            {tab === 'tasks' ? <TaskBoard tasks={state.tasks} /> : null}
-            {tab === 'changes' ? (
+            </div>
+            <div
+              id="tabpanel-tasks"
+              role="tabpanel"
+              aria-labelledby="tab-tasks"
+              className={tab === 'tasks' ? 'h-full' : 'hidden'}
+            >
+              <TaskBoard tasks={state.tasks} />
+            </div>
+            <div
+              id="tabpanel-changes"
+              role="tabpanel"
+              aria-labelledby="tab-changes"
+              className={tab === 'changes' ? 'h-full' : 'hidden'}
+            >
               <DiffViewer patches={state.tasks.flatMap((task) => task.patches)} />
-            ) : null}
-            {tab === 'workspace' ? <WorkspacePanel refreshToken={workspaceToken} /> : null}
-            {tab === 'runs' ? <RunsPanel /> : null}
+            </div>
+            <div
+              id="tabpanel-workspace"
+              role="tabpanel"
+              aria-labelledby="tab-workspace"
+              className={tab === 'workspace' ? 'h-full' : 'hidden'}
+            >
+              <WorkspacePanel refreshToken={workspaceToken} />
+            </div>
+            <div
+              id="tabpanel-runs"
+              role="tabpanel"
+              aria-labelledby="tab-runs"
+              className={tab === 'runs' ? 'h-full' : 'hidden'}
+            >
+              <RunsPanel />
+            </div>
           </div>
         </main>
 

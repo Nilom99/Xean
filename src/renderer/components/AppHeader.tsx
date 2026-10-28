@@ -71,11 +71,18 @@ export function AppHeader({
           size="sm"
           onClick={onPickWorkspace}
           title="Choose the workspace folder"
+          aria-label="Choose workspace folder"
         >
           <FolderOpen size={13} />
         </Button>
 
-        <Button variant="ghost" size="sm" onClick={onOpenSettings} title="Settings">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onOpenSettings}
+          title="Settings"
+          aria-label="Open settings"
+        >
           <Settings2 size={13} />
         </Button>
 
